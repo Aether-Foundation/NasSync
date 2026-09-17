@@ -4,7 +4,19 @@
     <RootNamespace>NasSync.CfApi</RootNamespace>
     <AssemblyName>NasSync.CfApi</AssemblyName>
     <Description>P/Invoke wrapper for Windows Cloud Filter API (CfAPI) — manages sync roots, placeholders, hydration callbacks, and data transfer.</Description>
+
+    <!-- Allow unsafe code for P/Invoke pointer operations and fixed buffers -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Enable WinRT interop for StorageProviderSyncRootManager -->
+    <CsWinRTEnabled>true</CsWinRTEnabled>
+    <CsWinRTWindowsMetadata>10.0.22000.0</CsWinRTWindowsMetadata>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows App SDK for WinRT type projections (StorageProviderSyncRootManager, etc.) -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.*" />
+  </ItemGroup>
 
 </Project>
