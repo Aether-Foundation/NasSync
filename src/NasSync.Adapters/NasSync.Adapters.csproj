@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>NasSync.Adapters</RootNamespace>
+    <AssemblyName>NasSync.Adapters</AssemblyName>
+    <Description>Adapter interfaces and abstractions for pluggable NAS protocol and system adapters.</Description>
+  </PropertyGroup>
+
+</Project>
