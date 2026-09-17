@@ -5,13 +5,20 @@ namespace NasSync.CfApi;
 
 /// <summary>
 /// High-level manager for cloud file placeholder operations.
-/// Wraps the native CfAPI placeholder functions (create, update, dehydrate, convert)
-/// into an ergonomic async C# API with proper error handling.
+/// Wraps the native CfAPI placeholder functions (create, convert, dehydrate, set in-sync)
+/// into an ergonomic C# API with proper error handling.
 ///
 /// <para>
 /// Placeholder files appear as regular files in File Explorer and to applications,
 /// but their data is stored on the remote NAS rather than locally. When an application
 /// opens a placeholder, the platform triggers a FETCH_DATA callback to download the data.
+/// </para>
+///
+/// <para>
+/// Most placeholder-management APIs (<c>CfConvertToPlaceholder</c>,
+/// <c>CfUpdatePlaceholder</c>, <c>CfDehydratePlaceholder</c>, <c>CfSetInSyncState</c>)
+/// operate on an open <c>HANDLE</c> rather than a path or volume+FileId pair. The helpers
+/// here open the handle internally with the required access and flags.
 /// </para>
 /// </summary>
 public sealed class PlaceholderManager
@@ -20,6 +27,9 @@ public sealed class PlaceholderManager
 
     /// <summary>Win32 constant: GENERIC_READ access.</summary>
     private const uint GENERIC_READ = 0x80000000;
+
+    /// <summary>Win32 constant: GENERIC_WRITE access (required by convert/update/dehydrate).</summary>
+    private const uint GENERIC_WRITE = 0x40000000;
 
     /// <summary>Win32 constant: Share read + write + delete.</summary>
     private const uint FILE_SHARE_ALL = 0x07;
@@ -39,6 +49,15 @@ public sealed class PlaceholderManager
     /// <summary>Win32 constant: Read-only file attribute.</summary>
     private const uint FILE_ATTRIBUTE_READONLY = 0x01;
 
+    /// <summary>CF_EOF — sentinel meaning "to the end of the file" for range operations.</summary>
+    private const long CF_EOF = -1L;
+
+    /// <summary>CF_CONVERT_FLAG_MARK_IN_SYNC.</summary>
+    private const uint CF_CONVERT_FLAG_MARK_IN_SYNC = 0x00000001;
+
+    /// <summary>CF_UPDATE_FLAG_MARK_IN_SYNC.</summary>
+    private const uint CF_UPDATE_FLAG_MARK_IN_SYNC = 0x00000002;
+
     /// <summary>
     /// Creates a new PlaceholderManager for the specified sync root.
     /// </summary>
@@ -55,8 +74,8 @@ public sealed class PlaceholderManager
 
     /// <summary>
     /// Creates placeholder files and directories under the sync root.
-    /// Placeholders are lightweight representations (~1 KB each) that appear as
-    /// real files but download their data on demand.
+    /// Placeholders are lightweight representations that appear as real files
+    /// but download their data on demand.
     /// </summary>
     /// <param name="entries">
     /// Collection of file/directory entries to create as placeholders.
@@ -79,15 +98,19 @@ public sealed class PlaceholderManager
             return Task.CompletedTask;
         }
 
-        // Build native placeholder info array
+        // Build the native placeholder create-info array. The marshaller handles the
+        // LPWSTR RelativeFileName fields and copies back each entry's Result/CreateUsn.
         var nativeEntries = new CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO[entries.Count];
+        var perEntryFlags = markInSync
+            ? CfNativeTypes.CF_PLACEHOLDER_CREATE_FLAGS.MARK_IN_SYNC
+            : CfNativeTypes.CF_PLACEHOLDER_CREATE_FLAGS.NONE;
 
         for (int i = 0; i < entries.Count; i++)
         {
-            var entry = entries[i];
+            PlaceholderEntry entry = entries[i];
             nativeEntries[i] = new CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO
             {
-                RelativePath = entry.RelativePath,
+                RelativeFileName = entry.RelativePath,
                 FsMetadata = new CfNativeTypes.CF_FS_METADATA
                 {
                     FileSize = entry.IsDirectory ? 0 : entry.FileSize,
@@ -102,88 +125,92 @@ public sealed class PlaceholderManager
                             : FILE_ATTRIBUTE_NORMAL,
                     },
                 },
-                Flags = markInSync ? CfNativeTypes.CF_CREATE_FLAGS.MARK_IN_SYNC : CfNativeTypes.CF_CREATE_FLAGS.NONE,
+                FileIdentity = IntPtr.Zero,
+                FileIdentityLength = 0,
+                Flags = perEntryFlags,
             };
         }
 
-        // Call native CfCreatePlaceholders
         int hr = CfNativeMethods.CfCreatePlaceholders(
             _syncRootPath,
             nativeEntries,
             (uint)nativeEntries.Length,
-            markInSync ? CfNativeTypes.CF_CREATE_FLAGS.MARK_IN_SYNC : CfNativeTypes.CF_CREATE_FLAGS.NONE,
-            IntPtr.Zero, // no completion routine
-            IntPtr.Zero, // no completion key
-            IntPtr.Zero); // no callback info
+            CfNativeTypes.CF_CREATE_FLAGS.STOP_ON_ERROR,
+            out uint entriesProcessed);
 
         if (hr != 0)
         {
+            // Surface the first per-entry failure to aid diagnostics.
+            int firstEntryError = 0;
+            string? firstErrorPath = null;
+            for (int i = 0; i < nativeEntries.Length; i++)
+            {
+                if (nativeEntries[i].Result != 0)
+                {
+                    firstEntryError = nativeEntries[i].Result;
+                    firstErrorPath = nativeEntries[i].RelativeFileName;
+                    break;
+                }
+            }
+
             throw new CfApiException("CfCreatePlaceholders", hr,
-                $"Failed to create {entries.Count} placeholder(s) under '{_syncRootPath}'.");
+                $"Failed to create {entries.Count} placeholder(s) under '{_syncRootPath}' " +
+                $"(processed {entriesProcessed}). First entry error: 0x{firstEntryError:X8} " +
+                $"at '{firstErrorPath}'.");
         }
 
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Dehydrates a file, releasing its local cached data and reverting to placeholder state.
-    /// The file remains visible in the file system but its data will be re-downloaded on next access.
+    /// Converts a regular (non-placeholder) file into a cloud placeholder, releasing its
+    /// local data. Use this when a user creates a new local file that should be synced to
+    /// the NAS and then dehydrated.
     /// </summary>
-    /// <param name="volumeDosName">Volume DOS name (e.g., "C:\").</param>
-    /// <param name="fileId">The NTFS file ID of the file to dehydrate.</param>
-    /// <returns>A task representing the asynchronous dehydration operation.</returns>
-    /// <exception cref="CfApiException">Thrown if the native CfDehydratePlaceholder call fails.</exception>
-    public Task DehydrateAsync(string volumeDosName, long fileId)
-    {
-        int hr = CfNativeMethods.CfDehydratePlaceholder(volumeDosName, fileId, 0);
-
-        if (hr != 0)
-        {
-            throw new CfApiException("CfDehydratePlaceholder", hr,
-                $"Failed to dehydrate file ID {fileId} on volume '{volumeDosName}'.");
-        }
-
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Converts a regular (non-placeholder) file into a cloud placeholder.
-    /// The file's data is released after conversion. Use this when a user creates a
-    /// new local file that should be synced to the NAS and then dehydrated.
-    /// </summary>
-    /// <param name="volumeDosName">Volume DOS name (e.g., "C:\").</param>
-    /// <param name="fileId">The NTFS file ID of the file to convert.</param>
-    /// <returns>A task representing the asynchronous conversion operation.</returns>
+    /// <param name="fullPath">The full path to the file to convert.</param>
     /// <exception cref="CfApiException">Thrown if the native CfConvertToPlaceholder call fails.</exception>
-    public Task ConvertToPlaceholderAsync(string volumeDosName, long fileId)
+    public void ConvertToPlaceholder(string fullPath)
     {
-        int hr = CfNativeMethods.CfConvertToPlaceholder(volumeDosName, fileId, 0);
+        using Microsoft.Win32.SafeHandles.SafeFileHandle handle = OpenHandle(fullPath, writeAccess: true);
+
+        long usn = 0;
+        int hr = CfNativeMethods.CfConvertToPlaceholder(
+            handle.DangerousGetHandle(),
+            IntPtr.Zero,        // no file identity
+            0,                  // no file identity length
+            CF_CONVERT_FLAG_MARK_IN_SYNC,
+            ref usn,
+            IntPtr.Zero);       // synchronous (no overlapped)
 
         if (hr != 0)
         {
             throw new CfApiException("CfConvertToPlaceholder", hr,
-                $"Failed to convert file ID {fileId} on volume '{volumeDosName}' to placeholder.");
+                $"Failed to convert '{fullPath}' to a placeholder.");
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Reports download progress for a hydration operation.
-    /// Causes the Shell to display progress UI in File Explorer and/or as a toast notification.
-    /// Should be called periodically during long downloads (e.g., every 64 KB or 100 ms).
+    /// Dehydrates a file, releasing its local cached data and reverting to placeholder state.
+    /// The file remains visible in the file system but its data re-downloads on next access.
     /// </summary>
-    /// <param name="fileSize">Total file size in bytes.</param>
-    /// <param name="bytesTransferred">Number of bytes downloaded so far.</param>
-    public void ReportProgress(long fileSize, long bytesTransferred)
+    /// <param name="fullPath">The full path to the file to dehydrate.</param>
+    /// <exception cref="CfApiException">Thrown if the native CfDehydratePlaceholder call fails.</exception>
+    public void Dehydrate(string fullPath)
     {
-        // Clamp values to valid range
-        bytesTransferred = Math.Clamp(bytesTransferred, 0, fileSize);
+        using Microsoft.Win32.SafeHandles.SafeFileHandle handle = OpenHandle(fullPath, writeAccess: true);
 
-        int hr = CfNativeMethods.CfReportProviderProgress(_syncRootPath, fileSize, bytesTransferred);
+        int hr = CfNativeMethods.CfDehydratePlaceholder(
+            handle.DangerousGetHandle(),
+            0,                  // starting offset
+            CF_EOF,             // to end of file
+            0,                  // CF_DEHYDRATE_FLAG_NONE
+            IntPtr.Zero);       // synchronous
 
-        // Progress reporting failures are non-fatal — silently ignore
-        _ = hr;
+        if (hr != 0)
+        {
+            throw new CfApiException("CfDehydratePlaceholder", hr,
+                $"Failed to dehydrate '{fullPath}'.");
+        }
     }
 
     // =========================================================================
@@ -193,12 +220,7 @@ public sealed class PlaceholderManager
     /// <summary>
     /// Retrieves the NTFS file index (FileId) for a given file or directory path.
     /// This FileId matches the <c>FileId</c> field in CfAPI callback structures,
-    /// enabling path resolution when callbacks fire.
-    ///
-    /// <para>
-    /// Uses <c>CreateFileW</c> with <c>FILE_FLAG_BACKUP_SEMANTICS</c> to open directories,
-    /// then <c>GetFileInformationByHandle</c> to extract the file index.
-    /// </para>
+    /// enabling path resolution when callbacks fire without a normalized path.
     /// </summary>
     /// <param name="fullPath">The full path to the file or directory.</param>
     /// <returns>The 64-bit NTFS file index.</returns>
@@ -207,21 +229,7 @@ public sealed class PlaceholderManager
     /// </exception>
     public static long GetFileId(string fullPath)
     {
-        using var handle = CfNativeMethods.CreateFileW(
-            fullPath,
-            GENERIC_READ,
-            FILE_SHARE_ALL,
-            IntPtr.Zero,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS, // Required for opening directories
-            IntPtr.Zero);
-
-        if (handle.IsInvalid)
-        {
-            throw new System.ComponentModel.Win32Exception(
-                Marshal.GetLastWin32Error(),
-                $"Failed to open '{fullPath}' for FileId query.");
-        }
+        using Microsoft.Win32.SafeHandles.SafeFileHandle handle = OpenHandle(fullPath, writeAccess: false);
 
         if (!CfNativeMethods.GetFileInformationByHandle(handle, out CfNativeTypes.BY_HANDLE_FILE_INFORMATION info))
         {
@@ -230,7 +238,7 @@ public sealed class PlaceholderManager
                 $"Failed to get file information for '{fullPath}'.");
         }
 
-        // Combine high and low 32-bit parts into a 64-bit file index
+        // Combine high and low 32-bit parts into a 64-bit file index.
         return ((long)info.FileIndexHigh << 32) | info.FileIndexLow;
     }
 
@@ -241,39 +249,21 @@ public sealed class PlaceholderManager
     /// <summary>
     /// Marks a file as in-sync with the remote source. This tells the Cloud Filter platform
     /// that the local file matches the remote version, preventing unnecessary re-download.
-    /// Uses <c>CfUpdatePlaceholder</c> with the <c>MARK_IN_SYNC</c> flag.
+    /// Uses <c>CfSetInSyncState</c> on an open handle.
     /// </summary>
     /// <param name="fullPath">The full path to the file to mark as in-sync.</param>
     public void MarkInSync(string fullPath)
     {
         try
         {
-            long fileId = GetFileId(fullPath);
-            string volumeDosName = Path.GetPathRoot(fullPath)!;
-            var fileInfo = new FileInfo(fullPath);
+            using Microsoft.Win32.SafeHandles.SafeFileHandle handle = OpenHandle(fullPath, writeAccess: true);
 
-            var metadata = new CfNativeTypes.CF_FS_METADATA
-            {
-                FileSize = fileInfo.Length,
-                BasicInfo = new CfNativeTypes.FILE_BASIC_INFO
-                {
-                    CreationTime = fileInfo.CreationTimeUtc.ToFileTime(),
-                    LastWriteTime = fileInfo.LastWriteTimeUtc.ToFileTime(),
-                    LastAccessTime = fileInfo.LastAccessTimeUtc.ToFileTime(),
-                    ChangeTime = fileInfo.LastWriteTimeUtc.ToFileTime(),
-                    FileAttributes = FILE_ATTRIBUTE_NORMAL,
-                },
-            };
-
-            int hr = CfNativeMethods.CfUpdatePlaceholder(
-                volumeDosName,
-                fileId,
-                dehydrate: false,
-                updateFlags: 0x04, // CF_UPDATE_FLAG_MARK_IN_SYNC
-                ref metadata,
-                IntPtr.Zero, // no dehydrate ranges
-                0,           // no dehydrate range count
-                out long usn);
+            long usn = 0;
+            int hr = CfNativeMethods.CfSetInSyncState(
+                handle.DangerousGetHandle(),
+                CfNativeTypes.CF_IN_SYNC_STATE.IN_SYNC,
+                0,          // CF_SET_IN_SYNC_FLAG_NONE
+                ref usn);
 
             if (hr != 0)
             {
@@ -283,10 +273,47 @@ public sealed class PlaceholderManager
         }
         catch (Exception ex)
         {
-            // Non-fatal — file will still work, just won't be marked as in-sync
+            // Non-fatal — the file still works, it just won't be marked as in-sync.
             System.Diagnostics.Debug.WriteLine(
                 $"[PlaceholderManager] MarkInSync error for '{fullPath}': {ex.Message}");
         }
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
+
+    /// <summary>
+    /// Opens a file handle suitable for placeholder operations or FileId queries.
+    /// </summary>
+    /// <param name="fullPath">The path to open.</param>
+    /// <param name="writeAccess">
+    /// True to request GENERIC_WRITE (required by convert/update/dehydrate/in-sync APIs);
+    /// false for read-only access (sufficient for FileId queries).
+    /// </param>
+    /// <returns>An open <see cref="Microsoft.Win32.SafeHandles.SafeFileHandle"/>.</returns>
+    /// <exception cref="System.ComponentModel.Win32Exception">Thrown if the handle cannot be opened.</exception>
+    private static Microsoft.Win32.SafeHandles.SafeFileHandle OpenHandle(string fullPath, bool writeAccess)
+    {
+        uint access = writeAccess ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ;
+
+        Microsoft.Win32.SafeHandles.SafeFileHandle handle = CfNativeMethods.CreateFileW(
+            fullPath,
+            access,
+            FILE_SHARE_ALL,
+            IntPtr.Zero,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, // Required to open directories.
+            IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(),
+                $"Failed to open '{fullPath}'.");
+        }
+
+        return handle;
     }
 }
 
