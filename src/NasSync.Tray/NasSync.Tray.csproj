@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>NasSync.Tray</RootNamespace>
+    <AssemblyName>NasSync.Tray</AssemblyName>
+    <Description>System tray application — status indicator with quick actions for sync control and settings.</Description>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NasSync.Core\NasSync.Core.csproj" />
+  </ItemGroup>
+
+</Project>
