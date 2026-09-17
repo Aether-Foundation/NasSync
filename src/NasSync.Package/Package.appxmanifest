@@ -3,9 +3,7 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
-  IgnorableNamespaces="uap rescap desktop desktop4">
+  IgnorableNamespaces="uap rescap">
 
   <Identity
     Name="NasSync.NasCloudSync"
@@ -52,16 +50,8 @@
   </Capabilities>
 
   <!--
-    Desktop4 CloudFiles registration — registers this app as a cloud storage provider
-    so it appears in File Explorer's navigation pane.
+    CloudFiles navigation pane registration is handled at runtime via
+    CfRegisterSyncRoot + StorageProviderSyncRootManager APIs, not via manifest.
   -->
-  <Extensions>
-    <desktop4:Extension Category="windows.cloudFiles">
-      <desktop4:CloudFiles>
-        <desktop4:ContentUri Source="NasSync" />
-        <desktop4:ProviderDisplayName>NAS Cloud Sync</desktop4:ProviderDisplayName>
-      </desktop4:CloudFiles>
-    </desktop4:Extension>
-  </Extensions>
 
 </Package>
