@@ -1,3 +1,5 @@
+using Xunit;
+
 namespace NasSync.Core.Tests;
 
 /// <summary>
