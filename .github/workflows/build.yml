@@ -32,8 +32,7 @@ env:
   DOTNET_VERSION: "8.0.x"
   BUILD_CONFIGURATION: ${{ github.event.inputs.build_configuration || 'Release' }}
   ARTIFACT_NAME: "NasSync-Package"
-  # Enable WinRT interop — windows-latest has VS build tools for PRI generation
-  WINRT_ENABLED: "true"
+  SOLUTION_FILE: "NasSync.sln"
 
 jobs:
   # ===========================================================================
@@ -66,48 +65,25 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
-        run: dotnet restore
-        shell: pwsh
+        run: dotnet restore ${{ env.SOLUTION_FILE }}
 
-      - name: Build CfApi with WinRT enabled
+      - name: Build solution (with WinRT enabled)
         run: |
-          dotnet build src/NasSync.CfApi/NasSync.CfApi.csproj `
+          dotnet build ${{ env.SOLUTION_FILE }} `
             --configuration ${{ env.BUILD_CONFIGURATION }} `
             --no-restore `
-            /p:DefineConstants="WINRT_ENABLED"
-        shell: pwsh
-
-      - name: Build core libraries
-        run: |
-          dotnet build src/NasSync.Core/NasSync.Core.csproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --no-restore
-          dotnet build src/NasSync.Adapters/NasSync.Adapters.csproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --no-restore
-          dotnet build src/NasSync.Adapters.Smb/NasSync.Adapters.Smb.csproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --no-restore
-          dotnet build src/NasSync.Adapters.WebDav/NasSync.Adapters.WebDav.csproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --no-restore
-        shell: pwsh
-
-      - name: Build integration test
-        run: |
-          dotnet build tests/NasSync.CfApi.IntegrationTest/NasSync.CfApi.IntegrationTest.csproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --no-restore
+            /p:DefineConstants="WINRT_ENABLED%3BTRACE"
         shell: pwsh
 
       - name: Run unit tests
         run: |
-          dotnet test tests/NasSync.Core.Tests/NasSync.Core.Tests.csproj `
+          dotnet test ${{ env.SOLUTION_FILE }} `
             --configuration ${{ env.BUILD_CONFIGURATION }} `
             --no-build `
             --verbosity normal `
             --collect:"XPlat Code Coverage" `
-            --results-directory TestResults
+            --results-directory TestResults `
+            --filter "FullyQualifiedName!~IntegrationTest"
         shell: pwsh
 
       - name: Upload test results
@@ -163,8 +139,7 @@ jobs:
             ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
-        run: dotnet restore
-        shell: pwsh
+        run: dotnet restore ${{ env.SOLUTION_FILE }}
 
       # Generate a self-signed certificate for MSIX signing
       - name: Generate self-signed certificate
@@ -184,7 +159,7 @@ jobs:
           $certPassword = ConvertTo-SecureString -String "NasSyncCI2026" -Force -AsPlainText
           Export-PfxCertificate -Cert $cert -FilePath $certPath -Password $certPassword
 
-          # Also export the public cert (.cer) for users to trust
+          # Export the public cert (.cer) for users to trust
           Export-Certificate -Cert $cert -FilePath "NasSync-CI-PublicKey.cer"
 
           Write-Host "Certificate thumbprint: $($cert.Thumbprint)"
@@ -193,11 +168,19 @@ jobs:
           # Store thumbprint for packaging step
           echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
 
+      # Build the solution with WinRT enabled first
+      - name: Build solution
+        run: |
+          dotnet build ${{ env.SOLUTION_FILE }} `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore `
+            /p:DefineConstants="WINRT_ENABLED%3BTRACE"
+        shell: pwsh
+
       # Build and publish the WAP project
       - name: Build and publish MSIX package
         shell: pwsh
         run: |
-          # Build with WinRT enabled
           msbuild src/NasSync.Package/NasSync.Package.wapproj `
             /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
             /p:Platform=x64 `
@@ -205,7 +188,7 @@ jobs:
             /p:AppxBundle=Never `
             /p:AppxPackageDir="../publish/" `
             /p:UapAppxPackageBuildMode=SideloadOnly `
-            /restore
+            /t:Rebuild
 
       # Sign the MSIX if certificate was generated
       - name: Sign MSIX package
@@ -213,10 +196,15 @@ jobs:
         shell: pwsh
         run: |
           $msixFiles = Get-ChildItem -Path "publish/" -Filter "*.msix" -Recurse
-          foreach ($msix in $msixFiles) {
-            Write-Host "Signing: $($msix.FullName)"
-            signtool sign /fd SHA256 /a /f "ci-signing-cert.pfx" /p "NasSyncCI2026" $msix.FullName
-            Write-Host "Signed successfully."
+          if ($msixFiles.Count -eq 0) {
+            Write-Warning "No MSIX files found in publish/ directory"
+            Get-ChildItem -Path "publish/" -Recurse | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            foreach ($msix in $msixFiles) {
+              Write-Host "Signing: $($msix.FullName)"
+              & signtool sign /fd SHA256 /a /f "ci-signing-cert.pfx" /p "NasSyncCI2026" $msix.FullName
+              Write-Host "Signed successfully."
+            }
           }
 
       - name: Upload MSIX artifact
@@ -225,13 +213,12 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
             publish/**/*.msix
-            publish/**/*.cer
             NasSync-CI-PublicKey.cer
           retention-days: 30
           if-no-files-found: warn
 
   # ===========================================================================
-  # Release (only on tagged commits to main)
+  # Release (only on tagged commits)
   # ===========================================================================
   release:
     name: Create Release
