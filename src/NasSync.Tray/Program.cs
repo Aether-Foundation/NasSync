@@ -33,8 +33,13 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        // Initialize file logger
+        AppLogger.Initialize();
+        AppLogger.Info("Program", "Application starting");
+
         // Load configuration
         var settings = AppSettings.Load();
+        AppLogger.Info("Program", $"Config loaded: IsFirstRun={settings.IsFirstRun}, ServerDir='{settings.ServerDirectory}', SyncRoot='{settings.SyncRootPath}'");
 
         // First-run setup if no configuration exists
         if (settings.IsFirstRun)

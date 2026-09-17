@@ -79,9 +79,12 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
         try
         {
             // Step 1: Connect to the adapter
+            AppLogger.Info("SyncEngine", "Connecting to adapter...");
             await _adapter.ConnectAsync(cancellationToken);
+            AppLogger.Info("SyncEngine", "Adapter connected.");
 
             // Step 2: Register the sync root
+            AppLogger.Info("SyncEngine", $"Registering sync root at '{_config.SyncRootPath}'");
             var registrationInfo = new SyncRootRegistrationInfo
             {
                 ProviderId = _config.ProviderId,
@@ -128,6 +131,7 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
         }
         catch (Exception ex)
         {
+            AppLogger.Error("SyncEngine", "StartAsync failed", ex);
             TransitionState(SyncState.Error, ex.Message);
             throw;
         }

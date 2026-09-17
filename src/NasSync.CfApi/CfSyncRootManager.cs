@@ -120,6 +120,13 @@ public sealed class CfSyncRootManager : IDisposable
         // Step 1: Ensure the sync root directory exists
         Directory.CreateDirectory(registrationInfo.SyncRootPath);
 
+        System.Diagnostics.Debug.WriteLine(
+            $"[CfSyncRootManager] Registering sync root: Path='{registrationInfo.SyncRootPath}', " +
+            $"DisplayName='{registrationInfo.DisplayName}', " +
+            $"IconResource='{registrationInfo.IconResource}', " +
+            $"HydrationPolicy={registrationInfo.HydrationPolicy}, " +
+            $"PopulationPolicy={registrationInfo.PopulationPolicy}");
+
         // Step 2: Build the native registration structure
         var nativeRegistration = new CfNativeTypes.CF_SYNC_REGISTRATION
         {
