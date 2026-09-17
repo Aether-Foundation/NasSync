@@ -17,7 +17,8 @@ public interface ICfCallbackHandler
     /// <summary>
     /// Called when an application opens a placeholder file and needs data to be downloaded.
     /// The sync engine must download the requested byte range and provide it via
-    /// <see cref="HydrationDataProvider.ProvideDataAsync"/>.
+    /// <see cref="HydrationDataProvider.ProvideData"/> using the captured
+    /// <paramref name="request"/>.
     ///
     /// <para>
     /// This callback is invoked synchronously by the platform. The calling application's
@@ -25,22 +26,13 @@ public interface ICfCallbackHandler
     /// bridge async download code into this synchronous callback.
     /// </para>
     /// </summary>
-    /// <param name="filePath">The full path of the file being hydrated.</param>
-    /// <param name="offset">The byte offset to start reading from.</param>
-    /// <param name="length">The number of bytes to provide.</param>
-    /// <param name="transferKey">The transfer key for providing data via CfExecute.</param>
-    /// <param name="volumeGuidName">The volume GUID from the callback info.</param>
-    /// <param name="fileId">The NTFS file ID from the callback info.</param>
+    /// <param name="request">
+    /// The fetch request capturing the file path, required/optional byte ranges, and the
+    /// opaque connection/transfer/request keys needed to deliver data via CfExecute.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel the hydration operation.</param>
     /// <returns>A task representing the asynchronous data fetch operation.</returns>
-    Task FetchDataAsync(
-        string filePath,
-        long offset,
-        long length,
-        TransferKey transferKey,
-        Guid volumeGuidName,
-        long fileId,
-        CancellationToken cancellationToken);
+    Task FetchDataAsync(FetchDataRequest request, CancellationToken cancellationToken);
 
     /// <summary>
     /// Called when the platform needs to populate a directory with placeholder entries.
