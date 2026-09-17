@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NasSync.CfApi.IntegrationTest</RootNamespace>
+    <AssemblyName>NasSync.CfApi.IntegrationTest</AssemblyName>
+    <Description>Interactive integration test — registers a test sync root via native CfAPI and verifies File Explorer integration.</Description>
+
+    <!-- Allow unsafe for P/Invoke operations -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Suppress Windows App SDK packaging for standalone test exe -->
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NasSync.CfApi\NasSync.CfApi.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -15,7 +15,7 @@ A Windows Cloud Files API-based sync client for NAS devices, providing OneDrive-
 ## Requirements
 
 - Windows 11
-- .NET 9 SDK
+- .NET 8 SDK
 - Windows App SDK 1.6+
 
 ## Project Structure

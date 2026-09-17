@@ -207,7 +207,8 @@ public sealed class CfSyncRootManager : IDisposable
         // Connect with flags to receive process info and placeholder info in callbacks
         int hr = CfNativeMethods.CfConnectSyncRoot(
             _syncRootPath,
-            callbackEntries.AsSpan(),
+            callbackEntries,
+            (uint)callbackEntries.Length,
             CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_PROCESS_INFO |
                 CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_FULL_IMAGE_PATH,
             IntPtr.Zero, // context — we use the stored _callbackHandler field instead
@@ -295,7 +296,7 @@ public sealed class CfSyncRootManager : IDisposable
     /// </summary>
     /// <param name="handler">The managed callback handler.</param>
     /// <returns>An array of callback registrations for CfConnectSyncRoot.</returns>
-    private CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable(ICfCallbackHandler handler)
+    private unsafe CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable(ICfCallbackHandler handler)
     {
         // Create native delegates for each callback type we want to handle.
         // These delegates are pinned via GCHandle to prevent GC collection.

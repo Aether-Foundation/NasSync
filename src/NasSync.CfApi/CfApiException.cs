@@ -9,7 +9,7 @@ public class CfApiException : Exception
     /// <summary>
     /// Gets the HRESULT error code from the failed native API call.
     /// </summary>
-    public int HResult { get; }
+    public new int HResult { get; }
 
     /// <summary>
     /// Gets the name of the native function that failed (e.g., "CfRegisterSyncRoot").

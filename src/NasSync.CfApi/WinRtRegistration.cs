@@ -1,3 +1,7 @@
+// WinRT navigation pane integration — requires Windows App SDK and Visual Studio build tools.
+// To enable: uncomment WinRT packages in NasSync.CfApi.csproj and define WINRT_ENABLED.
+#if WINRT_ENABLED
+
 using Windows.Storage;
 using Windows.Storage.Provider;
 
@@ -173,3 +177,5 @@ public static class WinRtRegistration
         _ => StorageProviderPopulationPolicy.Full,
     };
 }
+
+#endif // WINRT_ENABLED

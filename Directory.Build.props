@@ -3,8 +3,8 @@
   <!-- Shared MSBuild properties for all projects in the solution -->
 
   <PropertyGroup>
-    <!-- Target framework — Windows 11 only -->
-    <TargetFramework>net9.0-windows10.0.22000.0</TargetFramework>
+    <!-- Target framework — Windows 11 only (requires .NET 8 SDK+) -->
+    <TargetFramework>net8.0-windows10.0.22000.0</TargetFramework>
 
     <!-- Language version -->
     <LangVersion>latest</LangVersion>

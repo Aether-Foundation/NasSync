@@ -7,16 +7,26 @@
 
     <!-- Allow unsafe code for P/Invoke pointer operations and fixed buffers -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-
-    <!-- Enable WinRT interop for StorageProviderSyncRootManager -->
-    <CsWinRTEnabled>true</CsWinRTEnabled>
-    <CsWinRTWindowsMetadata>10.0.22000.0</CsWinRTWindowsMetadata>
   </PropertyGroup>
 
+  <!--
+    NOTE: WinRT interop (StorageProviderSyncRootManager) requires the Windows App SDK
+    and Visual Studio build tools for PRI resource generation. The WinRtRegistration.cs
+    file is excluded from CLI builds. To enable WinRT navigation pane integration:
+    1. Install "Windows App SDK" workload in Visual Studio Installer
+    2. Uncomment the PackageReference below
+    3. Uncomment CsWinRTEnabled and CsWinRTWindowsMetadata
+    4. Build via Visual Studio or with MSBuild from Developer Command Prompt
+  -->
+  <!--
+  <PropertyGroup>
+    <CsWinRTEnabled>true</CsWinRTEnabled>
+    <CsWinRTWindowsMetadata>10.0.26100.0</CsWinRTWindowsMetadata>
+  </PropertyGroup>
   <ItemGroup>
-    <!-- Windows App SDK for WinRT type projections (StorageProviderSyncRootManager, etc.) -->
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
     <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.*" />
   </ItemGroup>
+  -->
 
 </Project>

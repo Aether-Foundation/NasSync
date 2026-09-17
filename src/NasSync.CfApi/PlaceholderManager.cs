@@ -88,7 +88,7 @@ public sealed class PlaceholderManager
         // Call native CfCreatePlaceholders
         int hr = CfNativeMethods.CfCreatePlaceholders(
             _syncRootPath,
-            nativeEntries.AsSpan(),
+            nativeEntries,
             (uint)nativeEntries.Length,
             markInSync ? CfNativeTypes.CF_CREATE_FLAGS.MARK_IN_SYNC : CfNativeTypes.CF_CREATE_FLAGS.NONE,
             IntPtr.Zero, // no completion routine
