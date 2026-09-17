@@ -32,4 +32,11 @@ internal sealed class CallbackContext
     /// Gets the full path to the sync root directory.
     /// </summary>
     public required string SyncRootPath { get; init; }
+
+    /// <summary>
+    /// Gets or sets the native connection key returned by <c>CfConnectSyncRoot</c>.
+    /// Required by <c>CfExecute</c> and <c>CfReportProviderProgress</c> to identify
+    /// the active connection a transfer belongs to. Set once after a successful connect.
+    /// </summary>
+    public long ConnectionKey { get; set; }
 }
