@@ -427,18 +427,21 @@ internal static class CfNativeTypes
     /// <summary>
     /// Native registration parameters for CfRegisterSyncRoot.
     /// Maps to CF_SYNC_REGISTRATION in cfapi.h.
+    ///
+    /// IMPORTANT: StructSize is USHORT (2 bytes) in the native header, NOT UINT.
+    /// Using uint causes struct layout mismatch and E_INVALIDARG (0x80070057).
     /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct CF_SYNC_REGISTRATION
     {
-        /// <summary>Size of this structure in bytes.</summary>
-        internal uint StructSize;
+        /// <summary>Size of this structure in bytes. MUST be ushort to match cfapi.h.</summary>
+        internal ushort StructSize;
 
-        /// <summary>Provider display name (up to CF_PROVIDER_NAME_MAX_LENGTH chars).</summary>
+        /// <summary>Provider display name (LPCWSTR in cfapi.h).</summary>
         [MarshalAs(UnmanagedType.LPWStr)]
         internal string? ProviderName;
 
-        /// <summary>Provider version string.</summary>
+        /// <summary>Provider version string (LPCWSTR in cfapi.h).</summary>
         [MarshalAs(UnmanagedType.LPWStr)]
         internal string? ProviderVersion;
 

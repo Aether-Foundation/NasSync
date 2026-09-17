@@ -153,7 +153,7 @@ public sealed class CfSyncRootManager : IDisposable
         // Step 2: Build the native registration structure
         var nativeRegistration = new CfNativeTypes.CF_SYNC_REGISTRATION
         {
-            StructSize = (uint)Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>(),
+            StructSize = (ushort)Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>(),
             ProviderName = registrationInfo.DisplayName,
             ProviderVersion = registrationInfo.Version,
             HydrationPolicy = (CfNativeTypes.CF_HYDRATION_POLICY)registrationInfo.HydrationPolicy,
