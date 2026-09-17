@@ -9,6 +9,14 @@
 **/Generated\ Files/
 
 # ===========================
+# Signing certificates (sensitive)
+# ===========================
+*.pfx
+*.snk
+ci-signing-cert.base64.txt
+!resources/**/*.snk
+
+# ===========================
 # Tool-specific
 # ===========================
 # Claude Code workspace (local only)
