@@ -188,7 +188,7 @@ jobs:
             /p:AppxBundle=Never `
             /p:AppxPackageDir="../publish/" `
             /p:UapAppxPackageBuildMode=SideloadOnly `
-            /t:Rebuild
+            /t:Build
 
       # Sign the MSIX if certificate was generated
       - name: Sign MSIX package
