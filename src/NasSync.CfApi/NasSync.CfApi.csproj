@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>NasSync.CfApi</RootNamespace>
+    <AssemblyName>NasSync.CfApi</AssemblyName>
+    <Description>P/Invoke wrapper for Windows Cloud Filter API (CfAPI) — manages sync roots, placeholders, hydration callbacks, and data transfer.</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>
