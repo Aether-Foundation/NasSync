@@ -55,6 +55,9 @@
     <!-- Deterministic builds -->
     <Deterministic>true</Deterministic>
 
+    <!-- Skip PRI resource generation for class libraries (only needed for MSIX packaging) -->
+    <GenerateLibraryLayout>false</GenerateLibraryLayout>
+
     <!-- Assembly metadata -->
     <Company>NasSync</Company>
     <Product>NAS Cloud Sync Client</Product>

@@ -8,6 +8,9 @@
     <!-- Allow unsafe code for P/Invoke pointer operations and fixed buffers -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
+    <!-- Skip PRI resource generation for class library (only needed for MSIX packaging) -->
+    <GenerateLibraryLayout>false</GenerateLibraryLayout>
+
     <!--
       WinRT interop:
       - WinRtRegistration.cs is gated by #if WINRT_ENABLED preprocessor directive
