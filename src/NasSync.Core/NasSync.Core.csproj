@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>NasSync.Core</RootNamespace>
+    <AssemblyName>NasSync.Core</AssemblyName>
+    <Description>Core sync engine for NAS Cloud Sync Client — change detection, conflict resolution, and hydration orchestration.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NasSync.CfApi\NasSync.CfApi.csproj" />
+    <ProjectReference Include="..\NasSync.Adapters\NasSync.Adapters.csproj" />
+  </ItemGroup>
+
+</Project>
