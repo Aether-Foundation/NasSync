@@ -12,7 +12,11 @@ namespace NasSync.CfApi.Interop;
 /// </summary>
 internal static partial class CfNativeMethods
 {
-    private const string CLDFLT_DLL = "cldfltl.dll";
+    /// <summary>
+    /// The Cloud Files API DLL name. On Windows 11 25H2+, this is <c>cldapi.dll</c>
+    /// (renamed from the older <c>cldfltl.dll</c>). We try <c>cldapi.dll</c> first.
+    /// </summary>
+    private const string CLDFLT_DLL = "cldapi.dll";
 
     // =========================================================================
     // Sync Root Lifecycle
