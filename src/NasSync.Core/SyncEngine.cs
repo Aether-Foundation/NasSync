@@ -84,7 +84,10 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
             AppLogger.Info("SyncEngine", "Adapter connected.");
 
             // Step 2: Register the sync root
-            AppLogger.Info("SyncEngine", $"Registering sync root at '{_config.SyncRootPath}'");
+            AppLogger.Info("SyncEngine",
+                $"Registering sync root at '{_config.SyncRootPath}', " +
+                $"DisplayName='{(string.IsNullOrEmpty(_config.DisplayName) ? "NAS Cloud Sync" : _config.DisplayName)}', " +
+                $"IconResource='{(string.IsNullOrEmpty(_config.IconResource) ? "%SystemRoot%\\system32\\imageres.dll,-1043" : _config.IconResource)}'");
             var registrationInfo = new SyncRootRegistrationInfo
             {
                 ProviderId = _config.ProviderId,

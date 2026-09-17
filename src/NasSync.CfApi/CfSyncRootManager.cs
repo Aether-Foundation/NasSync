@@ -120,12 +120,35 @@ public sealed class CfSyncRootManager : IDisposable
         // Step 1: Ensure the sync root directory exists
         Directory.CreateDirectory(registrationInfo.SyncRootPath);
 
+        // Step 1.5: Clean up any existing registration for this path
+        // This handles the case where a previous run left a stale registration
+        try
+        {
+            string existingId = SyncRootIdHelper.Build(registrationInfo.ProviderId, registrationInfo.AccountId);
+            int unregHr = CfNativeMethods.CfUnregisterSyncRoot(registrationInfo.SyncRootPath);
+            if (unregHr == 0)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[CfSyncRootManager] Cleaned up existing registration for '{registrationInfo.SyncRootPath}'");
+            }
+        }
+        catch
+        {
+            // Ignore — no existing registration to clean up
+        }
+
         System.Diagnostics.Debug.WriteLine(
             $"[CfSyncRootManager] Registering sync root: Path='{registrationInfo.SyncRootPath}', " +
             $"DisplayName='{registrationInfo.DisplayName}', " +
             $"IconResource='{registrationInfo.IconResource}', " +
             $"HydrationPolicy={registrationInfo.HydrationPolicy}, " +
             $"PopulationPolicy={registrationInfo.PopulationPolicy}");
+
+        // Log struct layout diagnostics for ARM64 debugging
+        int structSize = System.Runtime.InteropServices.Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>();
+        System.Diagnostics.Debug.WriteLine(
+            $"[CfSyncRootManager] CF_SYNC_REGISTRATION struct size: {structSize} bytes " +
+            $"(IntPtr.Size={IntPtr.Size}, Arch={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})");
 
         // Step 2: Build the native registration structure
         var nativeRegistration = new CfNativeTypes.CF_SYNC_REGISTRATION
