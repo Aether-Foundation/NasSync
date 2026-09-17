@@ -8,9 +8,6 @@
     <!-- Allow unsafe code for P/Invoke pointer operations and fixed buffers -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- Skip PRI resource generation for class library (only needed for MSIX packaging) -->
-    <GenerateLibraryLayout>false</GenerateLibraryLayout>
-
     <!--
       WinRT interop:
       - WinRtRegistration.cs is gated by #if WINRT_ENABLED preprocessor directive
@@ -22,7 +19,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
+    <!--
+      Use CsWinRT for WinRT type projections (StorageProviderSyncRootManager, etc.)
+      Intentionally NOT referencing Microsoft.WindowsAppSDK to avoid importing
+      MrtCore.PriGen.targets which requires full MSBuild from Visual Studio.
+      The WAP packaging project handles Windows App SDK runtime bundling.
+    -->
     <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.*" />
   </ItemGroup>
 
