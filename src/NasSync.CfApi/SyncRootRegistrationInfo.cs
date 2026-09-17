@@ -76,7 +76,8 @@ public sealed class SyncRootRegistrationInfo
 
 /// <summary>
 /// Primary hydration policy options for cloud files.
-/// Ordered by aggressiveness: Partial &lt; Progressive &lt; Full &lt; AlwaysFull.
+/// Values mirror the native CF_HYDRATION_POLICY_PRIMARY enum in cfapi.h so they can be
+/// cast directly: Partial=0, Progressive=1, Full=2, AlwaysFull=3.
 /// </summary>
 public enum HydrationPolicy
 {
@@ -95,29 +96,41 @@ public enum HydrationPolicy
 
 /// <summary>
 /// Modifiers that adjust the behavior of the primary hydration policy.
+/// Values mirror the native CF_HYDRATION_POLICY_MODIFIER enum in cfapi.h so they can be
+/// cast directly. These are flags and may be combined.
 /// </summary>
 [Flags]
 public enum HydrationPolicyModifier
 {
     /// <summary>No modifier applied.</summary>
-    None = 0,
+    None = 0x0000,
+
+    /// <summary>Validate returned data integrity before completing user I/O.</summary>
+    ValidationRequired = 0x0001,
+
+    /// <summary>Allow the platform to avoid persisting returned data to disk.</summary>
+    StreamingAllowed = 0x0002,
 
     /// <summary>Allow the system to automatically dehydrate files when disk space is low.</summary>
-    AutoDehydrationAllowed = 1,
+    AutoDehydrationAllowed = 0x0004,
 
     /// <summary>Allow full hydration restart if a previous download was interrupted.</summary>
-    AllowFullRestartHydration = 2
+    AllowFullRestartHydration = 0x0008
 }
 
 /// <summary>
 /// Population policy options for the sync root.
-/// Determines how placeholder files are initially populated.
+/// Values mirror the native CF_POPULATION_POLICY_PRIMARY enum in cfapi.h so they can be
+/// cast directly: Partial=0, Full=2, AlwaysFull=3.
 /// </summary>
 public enum PopulationPolicy
 {
-    /// <summary>Create all placeholders immediately on registration.</summary>
-    Full = 0,
+    /// <summary>Populate only the entries the requesting application needs.</summary>
+    Partial = 0,
 
-    /// <summary>Always keep all placeholders populated.</summary>
-    AlwaysFull = 1
+    /// <summary>Populate all entries of a directory when it is accessed.</summary>
+    Full = 2,
+
+    /// <summary>Always keep the full namespace populated locally.</summary>
+    AlwaysFull = 3
 }
