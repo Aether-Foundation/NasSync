@@ -177,25 +177,55 @@ jobs:
             /p:DefineConstants="WINRT_ENABLED%3BTRACE"
         shell: pwsh
 
-      # Build and publish the WAP project
-      - name: Build and publish MSIX package
+      # Publish the tray app as self-contained
+      - name: Publish NasSync Tray
         shell: pwsh
         run: |
-          msbuild src/NasSync.Package/NasSync.Package.wapproj `
-            /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
-            /p:Platform=x64 `
-            /p:DefineConstants="WINRT_ENABLED" `
-            /p:AppxBundle=Never `
-            /p:AppxPackageDir="../publish/" `
-            /p:UapAppxPackageBuildMode=SideloadOnly `
-            /t:Build
+          dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --runtime win-x64 `
+            --self-contained true `
+            --output ./publish/NasSync `
+            /p:DefineConstants="WINRT_ENABLED%3BTRACE"
+
+      # Package as MSIX using MakeAppx
+      - name: Create MSIX package
+        shell: pwsh
+        run: |
+          # Copy packaging files to output
+          New-Item -ItemType Directory -Force "publish/NasSync/Assets" | Out-Null
+          Copy-Item "src/NasSync.Package/Package.appxmanifest" "publish/NasSync/AppxManifest.xml"
+          Copy-Item "src/NasSync.Package/Assets/*" "publish/NasSync/Assets/" -Force
+
+          # Create _resources subfolder for PRI
+          New-Item -ItemType Directory -Force "publish/NasSync/_resources" | Out-Null
+
+          # Find MakeAppx.exe
+          $makeAppx = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "makeappx.exe" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $makeAppx) {
+            Write-Error "makeappx.exe not found"
+            exit 1
+          }
+
+          Write-Host "Using: $($makeAppx.FullName)"
+
+          # Create MSIX
+          & $makeAppx.FullName pack /d "publish/NasSync" /p "publish/NasSync.msix" /o /nv
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "MakeAppx failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+          Write-Host "MSIX created: publish/NasSync.msix"
+          Get-Item "publish/NasSync.msix" | Select-Object Name, Length
 
       # Sign the MSIX if certificate was generated
       - name: Sign MSIX package
         if: github.event.inputs.sign_package != 'false'
         shell: pwsh
         run: |
-          $msixFiles = Get-ChildItem -Path "publish/" -Filter "*.msix" -Recurse
+          $msixFiles = Get-ChildItem -Path "publish/" -Filter "*.msix"
           if ($msixFiles.Count -eq 0) {
             Write-Warning "No MSIX files found in publish/ directory"
             Get-ChildItem -Path "publish/" -Recurse | ForEach-Object { Write-Host $_.FullName }
@@ -212,10 +242,10 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
-            publish/**/*.msix
+            publish/*.msix
             NasSync-CI-PublicKey.cer
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # ===========================================================================
   # Release (only on tagged commits)
