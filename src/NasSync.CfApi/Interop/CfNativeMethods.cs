@@ -3,20 +3,30 @@ using System.Runtime.InteropServices;
 namespace NasSync.CfApi.Interop;
 
 /// <summary>
-/// P/Invoke declarations for the Windows Cloud Filter API (CfAPI).
-/// All functions are imported from cldfltl.dll, the user-mode companion to
-/// the cldflt.sys kernel minifilter driver that manages placeholder files.
+/// P/Invoke declarations for the Windows Cloud Files API (CfAPI).
+/// Signatures match <c>cfapi.h</c> exactly. All functions are exported by
+/// <c>cldapi.dll</c> (the user-mode companion to the cldflt.sys minifilter).
 ///
-/// Uses traditional DllImport for methods with complex struct marshaling,
-/// and LibraryImport (source-generated) for simpler signatures.
+/// <para>
+/// Marshalling notes:
+/// <list type="bullet">
+///   <item>Opaque keys (CF_CONNECTION_KEY, CF_TRANSFER_KEY, CF_REQUEST_KEY) are
+///         single <c>LARGE_INTEGER</c> values, passed as <see cref="long"/>.</item>
+///   <item>Callback/operation parameter blocks are C unions; they are modeled as
+///         explicit-layout structs (see <see cref="CfNativeTypes"/>) and passed by
+///         pointer so the caller can overlay the correct union member.</item>
+///   <item>The CfAPI callback delegate has the signature
+///         <c>void(CF_CALLBACK_INFO*, CF_CALLBACK_PARAMETERS*)</c> — two pointers.</item>
+/// </list>
+/// </para>
 /// </summary>
 internal static partial class CfNativeMethods
 {
     /// <summary>
-    /// The Cloud Files API DLL name. On Windows 11 25H2+, this is <c>cldapi.dll</c>
-    /// (renamed from the older <c>cldfltl.dll</c>). We try <c>cldapi.dll</c> first.
+    /// The Cloud Files API DLL. On Windows 11 this is <c>cldapi.dll</c>
+    /// (older drafts referenced the incorrect <c>cldfltl.dll</c>).
     /// </summary>
-    private const string CLDFLT_DLL = "cldapi.dll";
+    private const string CLDAPI_DLL = "cldapi.dll";
 
     // =========================================================================
     // Sync Root Lifecycle
@@ -24,185 +34,141 @@ internal static partial class CfNativeMethods
 
     /// <summary>
     /// Registers a sync root with the Cloud Filter platform.
-    /// Uses DllImport because CF_SYNC_REGISTRATION contains string fields
-    /// that require runtime marshaling.
+    /// <c>HRESULT CfRegisterSyncRoot(LPCWSTR, const CF_SYNC_REGISTRATION*,
+    /// const CF_SYNC_POLICIES*, CF_REGISTER_FLAGS)</c>.
     /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport(CLDAPI_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern int CfRegisterSyncRoot(
         string syncRootPath,
         ref CfNativeTypes.CF_SYNC_REGISTRATION registration,
-        out CfNativeTypes.CF_PLATFORM_INFO platformInfo);
+        ref CfNativeTypes.CF_SYNC_POLICIES policies,
+        CfNativeTypes.CF_REGISTER_FLAGS registerFlags);
 
-    /// <summary>
-    /// Unregisters a previously registered sync root.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
+    /// <summary>Unregisters a previously registered sync root.</summary>
+    [DllImport(CLDAPI_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern int CfUnregisterSyncRoot(string syncRootPath);
 
     /// <summary>
     /// Connects a registered sync root to begin receiving callbacks.
-    /// Uses DllImport for the callback registration array marshaling.
+    /// <c>HRESULT CfConnectSyncRoot(LPCWSTR, const CF_CALLBACK_REGISTRATION*,
+    /// LPCVOID CallbackContext, CF_CONNECT_FLAGS, CF_CONNECTION_KEY*)</c>.
+    /// The callback table must be terminated with a CF_CALLBACK_TYPE_NONE row.
     /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfConnectSyncRoot(
+    [DllImport(CLDAPI_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern unsafe int CfConnectSyncRoot(
         string syncRootPath,
-        [In] CfNativeTypes.CF_CALLBACK_REGISTRATION[] callbackTable,
-        uint callbackCount,
+        CfNativeTypes.CF_CALLBACK_REGISTRATION* callbackTable,
+        IntPtr callbackContext,
         CfNativeTypes.CF_CONNECT_FLAGS connectFlags,
-        IntPtr context,
-        out CfNativeTypes.CF_CONNECTION_KEY connectionKey);
+        out long connectionKey);
 
-    /// <summary>
-    /// Disconnects a previously connected sync root.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, SetLastError = true)]
-    internal static extern int CfDisconnectSyncRoot(CfNativeTypes.CF_CONNECTION_KEY connectionKey);
+    /// <summary>Disconnects a previously connected sync root.</summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern int CfDisconnectSyncRoot(long connectionKey);
 
-    // =========================================================================
-    // Placeholder Operations
-    // =========================================================================
-
-    /// <summary>
-    /// Creates placeholder files and/or directories under the sync root.
-    /// Uses DllImport for complex struct array marshaling.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfCreatePlaceholders(
-        string syncRootPath,
-        [In] CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO[] placeholderArray,
-        uint placeholderCount,
-        CfNativeTypes.CF_CREATE_FLAGS createFlags,
-        IntPtr completionRoutine,
-        IntPtr completionKey,
-        IntPtr callbackInfo);
-
-    /// <summary>
-    /// Updates placeholder metadata (timestamps, attributes, file size).
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfUpdatePlaceholder(
-        string volumeDosName,
-        long fileId,
-        [MarshalAs(UnmanagedType.Bool)] bool dehydrate,
-        uint updateFlags,
-        ref CfNativeTypes.CF_FS_METADATA fsMetadata,
-        IntPtr dehydrateRangeArray,
-        uint dehydrateRangeCount,
-        out long usn);
-
-    /// <summary>
-    /// Dehydrates a file, releasing local cached data.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfDehydratePlaceholder(
-        string volumeDosName,
-        long fileId,
-        uint flags);
-
-    /// <summary>
-    /// Converts a regular file to a cloud placeholder.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfConvertToPlaceholder(
-        string volumeDosName,
-        long fileId,
-        uint convertFlags);
-
-    // =========================================================================
-    // Data Transfer
-    // =========================================================================
-
-    /// <summary>
-    /// Provides data to satisfy a FETCH_DATA callback.
-    /// Uses unsafe pointer for the data buffer.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, SetLastError = true)]
-    internal static extern unsafe int CfExecute(
-        ref Guid volumeGuidName,
-        ref long fileId,
-        ref CfNativeTypes.CF_TRANSFER_KEY transferKey,
-        byte* buffer,
-        long length,
-        long offset,
-        CfNativeTypes.CF_EXECUTE_FLAGS flags,
-        out long usn);
-
-    /// <summary>
-    /// Gets the transfer key from a FETCH_DATA callback.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, SetLastError = true)]
-    internal static extern unsafe int CfGetTransferKey(
-        CfNativeTypes.CF_CALLBACK* callbackInfo,
-        out CfNativeTypes.CF_TRANSFER_KEY transferKey);
-
-    /// <summary>
-    /// Releases transfer data after completion or cancellation.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, SetLastError = true)]
-    internal static extern int CfReleaseTransferData(
-        ref Guid volumeGuidName,
-        ref long fileId,
-        ref CfNativeTypes.CF_TRANSFER_KEY transferKey);
-
-    // =========================================================================
-    // Query Functions
-    // =========================================================================
-
-    /// <summary>
-    /// Gets placeholder information (hydration state, file size, file IDs).
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfGetPlaceholderInfo(
-        string volumeDosName,
-        long fileId,
-        uint infoLevel,
-        IntPtr infoBuffer,
-        uint infoBufferLength,
-        out uint returnedLength);
-
-    /// <summary>
-    /// Gets hydration range information for a placeholder file.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfGetPlaceholderRangeInfo(
-        string volumeDosName,
-        long fileId,
-        IntPtr rangeArray,
-        uint rangeArrayLength,
-        out uint rangeCount);
-
-    // =========================================================================
-    // Progress Reporting
-    // =========================================================================
-
-    /// <summary>
-    /// Reports download progress to the Shell for UI display.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
-    internal static extern int CfReportProviderProgress(
-        string syncRootPath,
-        long fileSize,
-        long bytesTransferred);
-
-    // =========================================================================
-    // Platform Information
-    // =========================================================================
-
-    /// <summary>
-    /// Gets the current Cloud Filter platform version information.
-    /// </summary>
-    [DllImport(CLDFLT_DLL, SetLastError = true)]
+    /// <summary>Gets the current Cloud Filter platform version information.</summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
     internal static extern int CfGetPlatformInfo(out CfNativeTypes.CF_PLATFORM_INFO platformInfo);
 
     // =========================================================================
-    // Placeholder Compatibility Mode
+    // Placeholder Operations (all operate on an open HANDLE)
     // =========================================================================
 
     /// <summary>
-    /// Sets the placeholder compatibility mode for the current process.
+    /// Creates placeholder files and/or directories under a base directory.
+    /// <c>HRESULT CfCreatePlaceholders(LPCWSTR, CF_PLACEHOLDER_CREATE_INFO*, DWORD,
+    /// CF_CREATE_FLAGS, PDWORD EntriesProcessed)</c>. The array is in/out — the API
+    /// writes each entry's <c>Result</c> and <c>CreateUsn</c> back, so the marshaller
+    /// is given <c>[In, Out]</c> to copy the blittable result fields back.
     /// </summary>
-    [DllImport("ntdll.dll")]
-    internal static extern byte RtlSetProcessPlaceholderCompatibilityMode(byte mode);
+    [DllImport(CLDAPI_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int CfCreatePlaceholders(
+        string baseDirectoryPath,
+        [In, Out] CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO[] placeholderArray,
+        uint placeholderCount,
+        CfNativeTypes.CF_CREATE_FLAGS createFlags,
+        out uint entriesProcessed);
+
+    /// <summary>
+    /// Converts a regular file (referenced by an open handle) into a cloud placeholder.
+    /// <c>HRESULT CfConvertToPlaceholder(HANDLE, LPCVOID FileIdentity, DWORD,
+    /// CF_CONVERT_FLAGS, USN*, LPOVERLAPPED)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern int CfConvertToPlaceholder(
+        IntPtr fileHandle,
+        IntPtr fileIdentity,
+        uint fileIdentityLength,
+        uint convertFlags,
+        ref long convertUsn,
+        IntPtr overlapped);
+
+    /// <summary>
+    /// Updates an existing placeholder's metadata and/or in-sync state.
+    /// <c>HRESULT CfUpdatePlaceholder(HANDLE, const CF_FS_METADATA*, LPCVOID, DWORD,
+    /// const CF_FILE_RANGE*, DWORD, CF_UPDATE_FLAGS, USN*, LPOVERLAPPED)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int CfUpdatePlaceholder(
+        IntPtr fileHandle,
+        ref CfNativeTypes.CF_FS_METADATA fsMetadata,
+        IntPtr fileIdentity,
+        uint fileIdentityLength,
+        IntPtr dehydrateRangeArray,
+        uint dehydrateRangeCount,
+        uint updateFlags,
+        ref long updateUsn,
+        IntPtr overlapped);
+
+    /// <summary>
+    /// Dehydrates a placeholder, releasing local cached data.
+    /// <c>HRESULT CfDehydratePlaceholder(HANDLE, LARGE_INTEGER StartingOffset,
+    /// LARGE_INTEGER Length, CF_DEHYDRATE_FLAGS, LPOVERLAPPED)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern int CfDehydratePlaceholder(
+        IntPtr fileHandle,
+        long startingOffset,
+        long length,
+        uint dehydrateFlags,
+        IntPtr overlapped);
+
+    /// <summary>
+    /// Sets the in-sync state of a placeholder by handle.
+    /// <c>HRESULT CfSetInSyncState(HANDLE, CF_IN_SYNC_STATE, CF_SET_IN_SYNC_FLAGS, USN*)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern int CfSetInSyncState(
+        IntPtr fileHandle,
+        CfNativeTypes.CF_IN_SYNC_STATE inSyncState,
+        uint inSyncFlags,
+        ref long inSyncUsn);
+
+    // =========================================================================
+    // Data Transfer (CfExecute)
+    // =========================================================================
+
+    /// <summary>
+    /// Executes a sync-engine operation — most commonly TRANSFER_DATA to deliver
+    /// downloaded bytes for a FETCH_DATA callback.
+    /// <c>HRESULT CfExecute(const CF_OPERATION_INFO*, CF_OPERATION_PARAMETERS*)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern unsafe int CfExecute(
+        ref CfNativeTypes.CF_OPERATION_INFO opInfo,
+        CfNativeTypes.CF_OPERATION_PARAMETERS_TRANSFER_DATA* opParams);
+
+    /// <summary>
+    /// Reports provider progress to the Shell for a pending transfer.
+    /// <c>HRESULT CfReportProviderProgress(CF_CONNECTION_KEY, CF_TRANSFER_KEY,
+    /// LARGE_INTEGER Total, LARGE_INTEGER Completed)</c>.
+    /// </summary>
+    [DllImport(CLDAPI_DLL, SetLastError = true)]
+    internal static extern int CfReportProviderProgress(
+        long connectionKey,
+        long transferKey,
+        long providerProgressTotal,
+        long providerProgressCompleted);
 
     // =========================================================================
     // File Handle Operations (for FileId resolution)
@@ -210,16 +176,17 @@ internal static partial class CfNativeMethods
 
     /// <summary>
     /// Opens a file or device. Used with <see cref="GetFileInformationByHandle"/>
-    /// to retrieve the NTFS file index (FileId) for a given path.
+    /// to retrieve the NTFS file index (FileId), and to obtain handles required by
+    /// the placeholder APIs (CfConvertToPlaceholder, CfUpdatePlaceholder, etc.).
     /// </summary>
     /// <param name="lpFileName">The name of the file or device to open.</param>
-    /// <param name="dwDesiredAccess">The requested access (GENERIC_READ = 0x80000000).</param>
-    /// <param name="dwShareMode">The sharing mode (FILE_SHARE_READ|WRITE|DELETE = 0x07).</param>
+    /// <param name="dwDesiredAccess">Requested access (GENERIC_READ = 0x80000000).</param>
+    /// <param name="dwShareMode">Sharing mode (FILE_SHARE_READ|WRITE|DELETE = 0x07).</param>
     /// <param name="lpSecurityAttributes">Security attributes (IntPtr.Zero for default).</param>
     /// <param name="dwCreationDisposition">Action on existing/non-existing file (OPEN_EXISTING = 3).</param>
     /// <param name="dwFlagsAndAttributes">File flags (FILE_FLAG_BACKUP_SEMANTICS = 0x02000000 for directories).</param>
     /// <param name="hTemplateFile">Template file handle (IntPtr.Zero for none).</param>
-    /// <returns>A safe file handle, or invalid handle on failure.</returns>
+    /// <returns>A safe file handle, or an invalid handle on failure.</returns>
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
         string lpFileName,
@@ -231,9 +198,8 @@ internal static partial class CfNativeMethods
         IntPtr hTemplateFile);
 
     /// <summary>
-    /// Retrieves file system attributes and metadata for a file by handle.
-    /// Used to extract the NTFS file index (<c>FileIndexHigh</c>/<c>FileIndexLow</c>)
-    /// which matches the <c>FileId</c> in CfAPI callbacks.
+    /// Retrieves file metadata by handle. The <c>FileIndexHigh</c>/<c>FileIndexLow</c>
+    /// fields give the NTFS file index matching the <c>FileId</c> in CfAPI callbacks.
     /// </summary>
     /// <param name="hFile">A handle to the file (from CreateFileW).</param>
     /// <param name="lpFileInformation">Receives the file information structure.</param>
