@@ -105,6 +105,24 @@ jobs:
             !tests/*/bin/${{ env.BUILD_CONFIGURATION }}/**/*.pdb
           retention-days: 7
 
+      # Publish self-contained tray app for direct execution (no MSIX needed)
+      - name: Publish NasSync Tray (self-contained)
+        run: |
+          dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --runtime win-x64 `
+            --self-contained true `
+            --output ./tray-publish `
+            /p:DefineConstants="WINRT_ENABLED%3BTRACE"
+        shell: pwsh
+
+      - name: Upload tray app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NasSync-Tray-${{ env.BUILD_CONFIGURATION }}
+          path: tray-publish/
+          retention-days: 14
+
   # ===========================================================================
   # Package & Sign MSIX
   # ===========================================================================
