@@ -106,21 +106,39 @@ jobs:
           retention-days: 7
 
       # Publish self-contained tray app for direct execution (no MSIX needed)
-      - name: Publish NasSync Tray (self-contained)
+      # Build for ARM64 (target device) and x64 (compatibility)
+      - name: Publish NasSync Tray (ARM64)
+        run: |
+          dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --runtime win-arm64 `
+            --self-contained true `
+            --output ./tray-publish-arm64 `
+            /p:DefineConstants="WINRT_ENABLED%3BTRACE"
+        shell: pwsh
+
+      - name: Publish NasSync Tray (x64)
         run: |
           dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
             --configuration ${{ env.BUILD_CONFIGURATION }} `
             --runtime win-x64 `
             --self-contained true `
-            --output ./tray-publish `
+            --output ./tray-publish-x64 `
             /p:DefineConstants="WINRT_ENABLED%3BTRACE"
         shell: pwsh
 
-      - name: Upload tray app artifact
+      - name: Upload tray app artifact (ARM64)
         uses: actions/upload-artifact@v4
         with:
-          name: NasSync-Tray-${{ env.BUILD_CONFIGURATION }}
-          path: tray-publish/
+          name: NasSync-Tray-${{ env.BUILD_CONFIGURATION }}-ARM64
+          path: tray-publish-arm64/
+          retention-days: 14
+
+      - name: Upload tray app artifact (x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NasSync-Tray-${{ env.BUILD_CONFIGURATION }}-x64
+          path: tray-publish-x64/
           retention-days: 14
 
   # ===========================================================================
