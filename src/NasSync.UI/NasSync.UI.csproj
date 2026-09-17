@@ -4,15 +4,20 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>NasSync.UI</RootNamespace>
     <AssemblyName>NasSync.UI</AssemblyName>
-    <Description>WinUI 3 management interface — storage quota, share management, snapshot browsing, and system monitoring.</Description>
+    <Description>WinUI 3 settings window for NAS Cloud Sync — configuration, status display, and recent operations.</Description>
+
+    <!-- WinUI 3 configuration -->
     <UseWinUI>true</UseWinUI>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.*" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
   </ItemGroup>
 
   <ItemGroup>

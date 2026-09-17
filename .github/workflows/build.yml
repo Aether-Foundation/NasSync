@@ -105,8 +105,6 @@ jobs:
             !tests/*/bin/${{ env.BUILD_CONFIGURATION }}/**/*.pdb
           retention-days: 7
 
-      # Publish self-contained tray app for direct execution (no MSIX needed)
-      # Build for ARM64 (target device) and x64 (compatibility)
       - name: Publish NasSync Tray (ARM64)
         run: |
           dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
@@ -117,6 +115,18 @@ jobs:
             /p:DefineConstants="WINRT_ENABLED%3BTRACE"
         shell: pwsh
 
+      - name: Publish NasSync UI (ARM64)
+        run: |
+          dotnet publish src/NasSync.UI/NasSync.UI.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --runtime win-arm64 `
+            --self-contained true `
+            --output ./tray-publish-arm64 `
+            /p:WindowsPackageType=None `
+            /p:EnableCoreMrtTooling=false
+        shell: pwsh
+        continue-on-error: true
+
       - name: Publish NasSync Tray (x64)
         run: |
           dotnet publish src/NasSync.Tray/NasSync.Tray.csproj `
@@ -126,6 +136,18 @@ jobs:
             --output ./tray-publish-x64 `
             /p:DefineConstants="WINRT_ENABLED%3BTRACE"
         shell: pwsh
+
+      - name: Publish NasSync UI (x64)
+        run: |
+          dotnet publish src/NasSync.UI/NasSync.UI.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --runtime win-x64 `
+            --self-contained true `
+            --output ./tray-publish-x64 `
+            /p:WindowsPackageType=None `
+            /p:EnableCoreMrtTooling=false
+        shell: pwsh
+        continue-on-error: true
 
       - name: Upload tray app artifact (ARM64)
         uses: actions/upload-artifact@v4

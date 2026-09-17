@@ -12,6 +12,7 @@ internal sealed class TrayAppController : ApplicationContext
     private readonly SyncEngine _engine;
     private readonly AppSettings _settings;
     private readonly NotifyIcon _trayIcon;
+    private readonly NamedPipeServer _pipeServer;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _pauseResumeItem;
     private readonly ToolStripMenuItem _queueItem;
@@ -26,6 +27,7 @@ internal sealed class TrayAppController : ApplicationContext
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _pipeServer = new NamedPipeServer(engine);
 
         // Build context menu
         _statusItem = new ToolStripMenuItem("Status: Starting...") { Enabled = false };
@@ -71,6 +73,7 @@ internal sealed class TrayAppController : ApplicationContext
         try
         {
             await _engine.StartAsync();
+            _pipeServer.Start();
         }
         catch (Exception ex)
         {
@@ -227,6 +230,7 @@ internal sealed class TrayAppController : ApplicationContext
     private async void OnExit(object? sender, EventArgs? e)
     {
         _trayIcon.Visible = false;
+        _pipeServer.Stop();
 
         try
         {
@@ -238,6 +242,7 @@ internal sealed class TrayAppController : ApplicationContext
         }
 
         await _engine.DisposeAsync();
+        _pipeServer.Dispose();
         Application.Exit();
     }
 
