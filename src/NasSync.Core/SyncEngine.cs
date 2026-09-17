@@ -31,6 +31,7 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
     private readonly CfSyncRootManager _syncRootManager;
     private readonly PlaceholderManager _placeholderManager;
     private readonly CancellationTokenSource _cts = new();
+    private FileChangeWatcher? _changeWatcher;
 
     private SyncState _state = SyncState.Idle;
 
@@ -97,11 +98,29 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
 
             await _syncRootManager.RegisterAsync(registrationInfo, cancellationToken);
 
+#if WINRT_ENABLED
+            // Register navigation pane entry via WinRT (non-fatal if it fails)
+            try
+            {
+                await WinRtRegistration.RegisterAsync(registrationInfo, cancellationToken);
+                System.Diagnostics.Debug.WriteLine("[SyncEngine] WinRT navigation pane registered.");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SyncEngine] WinRT registration failed: {ex.Message}");
+            }
+#endif
+
             // Step 3: Populate placeholders from the adapter
             await PopulatePlaceholdersAsync(cancellationToken);
 
             // Step 4: Connect callbacks (engine is the handler)
             await _syncRootManager.ConnectAsync(this, cancellationToken);
+
+            // Step 5: Start file change watcher for bidirectional sync
+            _changeWatcher = new FileChangeWatcher(_config.SyncRootPath, _adapter);
+            _changeWatcher.UploadCompleted += (s, e) => SyncOperation?.Invoke(this, e);
+            _changeWatcher.Start();
 
             TransitionState(SyncState.Idle_Synced);
         }
@@ -121,6 +140,8 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
         }
 
         _cts.Cancel();
+
+        _changeWatcher?.Stop();
 
         if (_syncRootManager.IsConnected)
         {
@@ -142,6 +163,7 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
     {
         if (_state == SyncState.Idle_Synced || _state == SyncState.Syncing)
         {
+            _changeWatcher?.Stop();
             TransitionState(SyncState.Paused);
         }
     }
@@ -151,6 +173,7 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
     {
         if (_state == SyncState.Paused)
         {
+            _changeWatcher?.Start();
             TransitionState(SyncState.Idle_Synced);
         }
     }
@@ -164,13 +187,15 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
     /// <inheritdoc />
     public SyncQueueStatus GetQueueStatus()
     {
-        // Phase 3: simple status, no queue yet
-        return new SyncQueueStatus(0, 0, 0, 0);
+        int pending = _changeWatcher?.PendingCount ?? 0;
+        return new SyncQueueStatus(pending, 0, 0, 0);
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        _changeWatcher?.Dispose();
+
         if (_syncRootManager.IsConnected)
         {
             await _syncRootManager.DisconnectAsync();
@@ -231,6 +256,9 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
 
             // Report completion
             _placeholderManager.ReportProgress(length, length);
+
+            // Mark as recently synced to prevent FSW echo
+            _changeWatcher?.MarkRecentlySynced(filePath);
 
             SyncOperation?.Invoke(this, new SyncOperationEventArgs(
                 SyncOperationType.Download, SyncOperationStatus.Completed,
@@ -306,17 +334,48 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
     }
 
     /// <inheritdoc />
-    public Task NotifyDeleteAsync(string filePath)
+    public async Task NotifyDeleteAsync(string filePath)
     {
         System.Diagnostics.Debug.WriteLine($"[SyncEngine] NotifyDelete: {filePath}");
-        return Task.CompletedTask;
+
+        string relativePath = Path.GetRelativePath(_config.SyncRootPath, filePath);
+        string remotePath = "/" + relativePath.Replace('\\', '/');
+
+        try
+        {
+            _changeWatcher?.MarkRecentlySynced(filePath);
+            await _adapter.DeleteAsync(remotePath);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[SyncEngine] NotifyDelete error: {ex.Message}");
+        }
     }
 
     /// <inheritdoc />
-    public Task NotifyRenameAsync(string sourcePath, string destinationPath)
+    public async Task NotifyRenameAsync(string sourcePath, string destinationPath)
     {
         System.Diagnostics.Debug.WriteLine($"[SyncEngine] NotifyRename: {sourcePath} -> {destinationPath}");
-        return Task.CompletedTask;
+
+        if (string.IsNullOrEmpty(destinationPath))
+        {
+            return; // Destination not yet resolved from callback
+        }
+
+        string srcRelative = Path.GetRelativePath(_config.SyncRootPath, sourcePath);
+        string srcRemote = "/" + srcRelative.Replace('\\', '/');
+        string dstRelative = Path.GetRelativePath(_config.SyncRootPath, destinationPath);
+        string dstRemote = "/" + dstRelative.Replace('\\', '/');
+
+        try
+        {
+            _changeWatcher?.MarkRecentlySynced(destinationPath);
+            await _adapter.MoveAsync(srcRemote, dstRemote);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[SyncEngine] NotifyRename error: {ex.Message}");
+        }
     }
 
     /// <inheritdoc />

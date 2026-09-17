@@ -5,7 +5,7 @@ namespace NasSync.Tray;
 
 /// <summary>
 /// Entry point for the NAS Cloud Sync system tray application.
-/// Ensures single instance, configures paths, and launches the tray controller.
+/// Ensures single instance, loads configuration, and launches the tray controller.
 /// </summary>
 internal static class Program
 {
@@ -33,61 +33,45 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // Configure paths
-        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string syncRootPath = Path.Combine(userProfile, "NasSync");
-        string serverDirectory = Path.Combine(userProfile, "NasSyncServer");
+        // Load configuration
+        var settings = AppSettings.Load();
 
-        // Ensure server directory exists with sample files
-        EnsureServerDirectory(serverDirectory);
-
-        // Create adapter and engine
-        var adapter = new LocalFolderAdapter(serverDirectory, "local-test", "Local Test NAS");
-
-        var config = new SyncEngineConfiguration(
-            EngineId: "nassync-default",
-            ProviderId: "NasSync",
-            AccountId: "default",
-            SyncRootPath: syncRootPath,
-            DisplayName: "NAS Cloud Sync",
-            IconResource: @"%SystemRoot%\system32\imageres.dll,-1043");
-
-        var engine = new SyncEngine(config, adapter);
-
-        // Launch tray app
-        Application.Run(new TrayAppController(engine));
-    }
-
-    /// <summary>
-    /// Creates the server directory with sample files if it doesn't exist.
-    /// </summary>
-    private static void EnsureServerDirectory(string serverDirectory)
-    {
-        if (Directory.Exists(serverDirectory))
+        // First-run setup if no configuration exists
+        if (settings.IsFirstRun)
         {
+            if (!FirstRunSetup.Show(settings))
+            {
+                return; // User cancelled
+            }
+
+            settings.Save();
+        }
+
+        // Validate paths
+        if (string.IsNullOrWhiteSpace(settings.ServerDirectory) ||
+            string.IsNullOrWhiteSpace(settings.SyncRootPath))
+        {
+            MessageBox.Show(
+                "Configuration is incomplete.\nPlease delete ~/.nassync/config.json and restart.",
+                "NAS Cloud Sync",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
             return;
         }
 
-        Directory.CreateDirectory(serverDirectory);
-        Directory.CreateDirectory(Path.Combine(serverDirectory, "Documents"));
-        Directory.CreateDirectory(Path.Combine(serverDirectory, "Photos"));
+        // Ensure directories exist
+        Directory.CreateDirectory(settings.ServerDirectory);
+        Directory.CreateDirectory(settings.SyncRootPath);
 
-        // Create sample files
-        File.WriteAllText(
-            Path.Combine(serverDirectory, "readme.txt"),
-            "Welcome to NAS Cloud Sync!\n\nThis file is stored on the 'NAS' (server directory)\nand synced to your local sync root as a cloud placeholder.\n\nDouble-click the cloud icon to download and view this file.");
+        // Create adapter and engine
+        var adapter = new LocalFolderAdapter(
+            settings.ServerDirectory,
+            "local-folder",
+            "Local Folder NAS");
 
-        File.WriteAllText(
-            Path.Combine(serverDirectory, "Documents", "notes.txt"),
-            "Meeting Notes — 2026-09-17\n\n1. Set up CI/CD pipeline ✓\n2. Implement CfAPI wrapper ✓\n3. Build sync engine ✓\n4. Create tray app ✓\n5. Test navigation pane integration");
+        var engine = new SyncEngine(settings.ToEngineConfiguration(), adapter);
 
-        File.WriteAllText(
-            Path.Combine(serverDirectory, "Documents", "report.pdf"),
-            "%PDF-1.4 (sample placeholder — not a real PDF)");
-
-        // Create a small binary file to simulate a photo
-        byte[] sampleImage = new byte[1024];
-        new Random(42).NextBytes(sampleImage);
-        File.WriteAllBytes(Path.Combine(serverDirectory, "Photos", "vacation.jpg"), sampleImage);
+        // Launch tray app
+        Application.Run(new TrayAppController(engine, settings));
     }
 }

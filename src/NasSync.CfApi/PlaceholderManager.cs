@@ -233,6 +233,61 @@ public sealed class PlaceholderManager
         // Combine high and low 32-bit parts into a 64-bit file index
         return ((long)info.FileIndexHigh << 32) | info.FileIndexLow;
     }
+
+    // =========================================================================
+    // In-Sync Management
+    // =========================================================================
+
+    /// <summary>
+    /// Marks a file as in-sync with the remote source. This tells the Cloud Filter platform
+    /// that the local file matches the remote version, preventing unnecessary re-download.
+    /// Uses <c>CfUpdatePlaceholder</c> with the <c>MARK_IN_SYNC</c> flag.
+    /// </summary>
+    /// <param name="fullPath">The full path to the file to mark as in-sync.</param>
+    public void MarkInSync(string fullPath)
+    {
+        try
+        {
+            long fileId = GetFileId(fullPath);
+            string volumeDosName = Path.GetPathRoot(fullPath)!;
+            var fileInfo = new FileInfo(fullPath);
+
+            var metadata = new CfNativeTypes.CF_FS_METADATA
+            {
+                FileSize = fileInfo.Length,
+                BasicInfo = new CfNativeTypes.FILE_BASIC_INFO
+                {
+                    CreationTime = fileInfo.CreationTimeUtc.ToFileTime(),
+                    LastWriteTime = fileInfo.LastWriteTimeUtc.ToFileTime(),
+                    LastAccessTime = fileInfo.LastAccessTimeUtc.ToFileTime(),
+                    ChangeTime = fileInfo.LastWriteTimeUtc.ToFileTime(),
+                    FileAttributes = FILE_ATTRIBUTE_NORMAL,
+                },
+            };
+
+            int hr = CfNativeMethods.CfUpdatePlaceholder(
+                volumeDosName,
+                fileId,
+                dehydrate: false,
+                updateFlags: 0x04, // CF_UPDATE_FLAG_MARK_IN_SYNC
+                ref metadata,
+                IntPtr.Zero, // no dehydrate ranges
+                0,           // no dehydrate range count
+                out long usn);
+
+            if (hr != 0)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[PlaceholderManager] MarkInSync failed for '{fullPath}': HRESULT 0x{hr:X8}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal — file will still work, just won't be marked as in-sync
+            System.Diagnostics.Debug.WriteLine(
+                $"[PlaceholderManager] MarkInSync error for '{fullPath}': {ex.Message}");
+        }
+    }
 }
 
 /// <summary>
