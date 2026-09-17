@@ -3,526 +3,525 @@ using System.Runtime.InteropServices;
 namespace NasSync.CfApi.Interop;
 
 /// <summary>
-/// Native structure and enum definitions for the Windows Cloud Filter API (CfAPI).
-/// These types mirror the declarations in cfapi.h and are used exclusively by
-/// the P/Invoke layer. Managed code should use the higher-level wrapper types instead.
+/// Native structure and enum definitions for the Windows Cloud Files API (CfAPI).
+/// These types mirror the declarations in the Windows SDK <c>cfapi.h</c> header and
+/// are used exclusively by the P/Invoke layer. Managed code should use the
+/// higher-level wrapper types instead.
 ///
-/// All structures assume 64-bit (x64) Windows, which is the only supported platform
-/// for Windows 11 Cloud Files features.
+/// <para>
+/// Layout notes: all structures target 64-bit Windows (x64 and ARM64), where
+/// pointers and <c>LARGE_INTEGER</c> are 8 bytes. <c>StructSize</c> fields are
+/// <c>ULONG</c> (4 bytes) per cfapi.h — NOT <c>USHORT</c>. Structures that map to a
+/// C <c>union</c> (the callback/operation parameter blocks) use
+/// <see cref="LayoutKind.Explicit"/> with byte offsets taken directly from the SDK
+/// header so that field placement is unambiguous across architectures.
+/// </para>
 /// </summary>
 internal static class CfNativeTypes
 {
     // =========================================================================
-    // Constants
-    // =========================================================================
-
-    /// <summary>Size of the CF_CONNECT_INFO structure for version validation.</summary>
-    internal const int SIZEOF_CF_CONNECT_INFO = 32;
-
-    // =========================================================================
-    // Opaque handle types
+    // Opaque key types (DECLARE_OPAQUE_KEY in cfapi.h → { LONGLONG Internal; })
     // =========================================================================
 
     /// <summary>
-    /// Opaque handle to a connected sync root.
-    /// Returned by CfConnectSyncRoot, used by CfDisconnectSyncRoot.
+    /// Opaque handle to a connected sync root (CF_CONNECTION_KEY).
+    /// A single <c>LONGLONG</c>; modeled as <see cref="long"/> in signatures.
     /// </summary>
-    internal readonly struct CF_CONNECTION_KEY
-    {
-        /// <summary>Internal handle value.</summary>
-        internal readonly long Internal;
-
-        internal CF_CONNECTION_KEY(long value) => Internal = value;
-
-        /// <summary>Gets whether this key represents a valid connection.</summary>
-        internal bool IsValid => Internal != 0;
-    }
+    internal const int SIZEOF_CF_CONNECTION_KEY = 8;
 
     /// <summary>
-    /// Opaque transfer key identifying a pending data transfer request.
-    /// Used with CfExecute to provide data for a specific fetch operation.
+    /// Opaque transfer key (CF_TRANSFER_KEY = LARGE_INTEGER). Modeled as <see cref="long"/>.
     /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_TRANSFER_KEY
-    {
-        internal long Internal;
-    }
+    internal const int SIZEOF_CF_TRANSFER_KEY = 8;
+
+    /// <summary>Value of CF_CALLBACK_TYPE_NONE, used as the callback table terminator.</summary>
+    internal const int CF_CALLBACK_TYPE_NONE = -1;
 
     // =========================================================================
-    // Core enums
+    // Core enums (values copied verbatim from cfapi.h)
     // =========================================================================
 
-    /// <summary>
-    /// Identifies the type of callback invoked by the platform on the sync provider.
-    /// Maps to CF_CALLBACK_TYPE in cfapi.h.
-    /// </summary>
+    /// <summary>CF_CALLBACK_TYPE — identifies the callback the platform is invoking.</summary>
     internal enum CF_CALLBACK_TYPE : int
     {
-        /// <summary>Platform requests file data for hydration (most critical callback).</summary>
         FETCH_DATA = 0,
-
-        /// <summary>Platform requests validation of already-fetched data.</summary>
         VALIDATE_DATA = 1,
-
-        /// <summary>A previously requested fetch operation was cancelled.</summary>
         CANCEL_FETCH_DATA = 2,
-
-        /// <summary>Platform requests directory contents to create placeholders.</summary>
         FETCH_PLACEHOLDERS = 3,
-
-        /// <summary>A previously requested placeholder fetch was cancelled.</summary>
         CANCEL_FETCH_PLACEHOLDERS = 4,
-
-        /// <summary>A file open operation on a cloud file has completed.</summary>
         NOTIFY_FILE_OPEN_COMPLETION = 5,
-
-        /// <summary>A file is about to be dehydrated (local data released).</summary>
-        NOTIFY_DEHYDRATE = 6,
-
-        /// <summary>A file has been fully dehydrated.</summary>
-        NOTIFY_DEHYDRATE_COMPLETION = 7,
-
-        /// <summary>A file under the sync root was deleted.</summary>
-        NOTIFY_DELETE = 8,
-
-        /// <summary>A file under the sync root was renamed or moved.</summary>
-        NOTIFY_RENAME = 9,
-
-        /// <summary>The sync provider is being suspended.</summary>
-        SUSPEND = 10,
-
-        /// <summary>The sync provider is being resumed.</summary>
-        RESUME = 11,
+        NOTIFY_FILE_CLOSE_COMPLETION = 6,
+        NOTIFY_DEHYDRATE = 7,
+        NOTIFY_DEHYDRATE_COMPLETION = 8,
+        NOTIFY_DELETE = 9,
+        NOTIFY_DELETE_COMPLETION = 10,
+        NOTIFY_RENAME = 11,
+        NOTIFY_RENAME_COMPLETION = 12,
+        NONE = -1,
     }
 
-    /// <summary>
-    /// Flags for CfRegisterSyncRoot behavior.
-    /// Maps to CF_REGISTER_FLAGS in cfapi.h.
-    /// </summary>
+    /// <summary>CF_REGISTER_FLAGS — flags for CfRegisterSyncRoot.</summary>
     [Flags]
     internal enum CF_REGISTER_FLAGS : uint
     {
-        /// <summary>No flags.</summary>
-        NONE = 0,
-
-        /// <summary>Update an existing sync root registration.</summary>
-        UPDATE = 1,
-
-        /// <summary>Disable on-demand population of directory placeholders.</summary>
-        DISABLE_ON_DEMAND_POPULATION = 2,
-
-        /// <summary>Mark the sync root as in-sync during registration.</summary>
-        MARK_IN_SYNC = 4,
+        NONE = 0x00000000,
+        UPDATE = 0x00000001,
+        DISABLE_ON_DEMAND_POPULATION_ON_ROOT = 0x00000002,
+        MARK_IN_SYNC_ON_ROOT = 0x00000004,
     }
 
-    /// <summary>
-    /// Flags for CfConnectSyncRoot behavior.
-    /// Maps to CF_CONNECT_FLAGS in cfapi.h.
-    /// </summary>
-    [Flags]
-    internal enum CF_CONNECT_FLAGS : uint
+    /// <summary>CF_HYDRATION_POLICY_PRIMARY — primary hydration behavior.</summary>
+    internal enum CF_HYDRATION_POLICY_PRIMARY : ushort
     {
-        /// <summary>No flags.</summary>
-        NONE = 0,
-
-        /// <summary>Include process information in callback parameters.</summary>
-        REQUIRE_PROCESS_INFO = 1,
-
-        /// <summary>Include full image path of the requesting process.</summary>
-        REQUIRE_FULL_IMAGE_PATH = 2,
-
-        /// <summary>Include placeholder info in callback parameters.</summary>
-        GET_PLACEHOLDER_INFO = 4,
-
-        /// <summary>Include file size information in callbacks.</summary>
-        REQUIRE_FILE_SIZE = 8,
-    }
-
-    /// <summary>
-    /// Flags for CfCreatePlaceholders behavior.
-    /// Maps to CF_CREATE_FLAGS in cfapi.h.
-    /// </summary>
-    [Flags]
-    internal enum CF_CREATE_FLAGS : uint
-    {
-        /// <summary>Default create behavior.</summary>
-        NONE = 0,
-
-        /// <summary>Mark the placeholder as in-sync upon creation.</summary>
-        MARK_IN_SYNC = 1,
-    }
-
-    /// <summary>
-    /// Flags for CfExecute behavior.
-    /// Maps to CF_EXECUTE_FLAGS in cfapi.h.
-    /// </summary>
-    [Flags]
-    internal enum CF_EXECUTE_FLAGS : uint
-    {
-        /// <summary>No flags.</summary>
-        NONE = 0,
-
-        /// <summary>The provided data is the last chunk (signals completion).</summary>
-        CF_EXECUTE_FLAG_NONE = 0,
-    }
-
-    /// <summary>
-    /// Placeholder states indicating hydration status.
-    /// Maps to CF_PLACEHOLDER_STATE in cfapi.h.
-    /// </summary>
-    internal enum CF_PLACEHOLDER_STATE : int
-    {
-        /// <summary>Invalid or unknown state.</summary>
-        INVALID = -1,
-
-        /// <summary>State not yet determined.</summary>
-        UNSPECIFIED = 0,
-
-        /// <summary>File is a placeholder (cloud-only, no local data).</summary>
-        PLACEHOLDER = 1,
-
-        /// <summary>File has been hydrated (local data present).</summary>
-        HYDRATED = 2,
-
-        /// <summary>File is partially hydrated (some data ranges available).</summary>
-        PARTIAL = 3,
-
-        /// <summary>File is fully available locally.</summary>
-        FULL = 4,
-    }
-
-    /// <summary>
-    /// Hydration policy values for CfRegisterSyncRoot.
-    /// Maps to CF_HYDRATION_POLICY in cfapi.h.
-    /// Ordered by aggressiveness: PARTIAL &lt; PROGRESSIVE &lt; FULL &lt; ALWAYS_FULL.
-    /// </summary>
-    internal enum CF_HYDRATION_POLICY : ushort
-    {
-        /// <summary>Only download the byte ranges requested by the application.</summary>
         PARTIAL = 0,
-
-        /// <summary>Download data progressively as the application reads the file.</summary>
         PROGRESSIVE = 1,
-
-        /// <summary>Download the entire file on first access.</summary>
         FULL = 2,
-
-        /// <summary>File is always fully hydrated and never dehydrated.</summary>
         ALWAYS_FULL = 3,
     }
 
-    /// <summary>
-    /// Modifiers for the hydration policy.
-    /// Maps to CF_HYDRATION_POLICY_MODIFIER in cfapi.h.
-    /// </summary>
+    /// <summary>CF_HYDRATION_POLICY_MODIFIER — modifiers OR'd into the hydration policy.</summary>
     [Flags]
     internal enum CF_HYDRATION_POLICY_MODIFIER : ushort
     {
-        /// <summary>No modifier.</summary>
-        NONE = 0,
-
-        /// <summary>Allow automatic dehydration by the system when disk space is low.</summary>
-        AUTO_DEHYDRATION_ALLOWED = 1,
-
-        /// <summary>Allow full restart of hydration if interrupted.</summary>
-        ALLOW_FULL_RESTART_HYDRATION = 2,
+        NONE = 0x0000,
+        VALIDATION_REQUIRED = 0x0001,
+        STREAMING_ALLOWED = 0x0002,
+        AUTO_DEHYDRATION_ALLOWED = 0x0004,
+        ALLOW_FULL_RESTART_HYDRATION = 0x0008,
     }
 
-    /// <summary>
-    /// Population policy values for CfRegisterSyncRoot.
-    /// Maps to CF_POPULATION_POLICY in cfapi.h.
-    /// </summary>
-    internal enum CF_POPULATION_POLICY : ushort
+    /// <summary>CF_POPULATION_POLICY_PRIMARY — namespace population behavior.</summary>
+    internal enum CF_POPULATION_POLICY_PRIMARY : ushort
     {
-        /// <summary>Create all placeholders on registration.</summary>
-        FULL = 0,
+        PARTIAL = 0,
+        FULL = 2,
+        ALWAYS_FULL = 3,
+    }
 
-        /// <summary>Always keep all placeholders populated.</summary>
-        ALWAYS_FULL = 1,
+    /// <summary>CF_POPULATION_POLICY_MODIFIER — currently only NONE.</summary>
+    [Flags]
+    internal enum CF_POPULATION_POLICY_MODIFIER : ushort
+    {
+        NONE = 0x0000,
+    }
+
+    /// <summary>CF_INSYNC_POLICY — when the platform clears the in-sync state.</summary>
+    [Flags]
+    internal enum CF_INSYNC_POLICY : uint
+    {
+        NONE = 0x00000000,
+        TRACK_FILE_CREATION_TIME = 0x00000001,
+        TRACK_FILE_READONLY_ATTRIBUTE = 0x00000002,
+        TRACK_FILE_HIDDEN_ATTRIBUTE = 0x00000004,
+        TRACK_FILE_SYSTEM_ATTRIBUTE = 0x00000008,
+        TRACK_DIRECTORY_CREATION_TIME = 0x00000010,
+        TRACK_DIRECTORY_READONLY_ATTRIBUTE = 0x00000020,
+        TRACK_DIRECTORY_HIDDEN_ATTRIBUTE = 0x00000040,
+        TRACK_DIRECTORY_SYSTEM_ATTRIBUTE = 0x00000080,
+        TRACK_FILE_LAST_WRITE_TIME = 0x00000100,
+        TRACK_DIRECTORY_LAST_WRITE_TIME = 0x00000200,
+        TRACK_FILE_ALL = 0x0055550f,
+        TRACK_DIRECTORY_ALL = 0x00aaaaf0,
+        TRACK_ALL = 0x00ffffff,
+        PRESERVE_INSYNC_FOR_SYNC_ENGINE = 0x80000000,
+    }
+
+    /// <summary>CF_HARDLINK_POLICY — whether hard links are permitted on placeholders.</summary>
+    [Flags]
+    internal enum CF_HARDLINK_POLICY : uint
+    {
+        NONE = 0x00000000,
+        ALLOWED = 0x00000001,
+    }
+
+    /// <summary>CF_PLACEHOLDER_MANAGEMENT_POLICY — non-provider placeholder operations.</summary>
+    [Flags]
+    internal enum CF_PLACEHOLDER_MANAGEMENT_POLICY : uint
+    {
+        DEFAULT = 0x00000000,
+        CREATE_UNRESTRICTED = 0x00000001,
+        CONVERT_TO_UNRESTRICTED = 0x00000002,
+        UPDATE_UNRESTRICTED = 0x00000004,
+    }
+
+    /// <summary>CF_CONNECT_FLAGS — extra information requested in callbacks.</summary>
+    [Flags]
+    internal enum CF_CONNECT_FLAGS : uint
+    {
+        NONE = 0x00000000,
+        REQUIRE_PROCESS_INFO = 0x00000002,
+        REQUIRE_FULL_FILE_PATH = 0x00000004,
+        BLOCK_SELF_IMPLICIT_HYDRATION = 0x00000008,
+    }
+
+    /// <summary>CF_PLACEHOLDER_CREATE_FLAGS — per-entry flags for CfCreatePlaceholders.</summary>
+    [Flags]
+    internal enum CF_PLACEHOLDER_CREATE_FLAGS : uint
+    {
+        NONE = 0x00000000,
+        DISABLE_ON_DEMAND_POPULATION = 0x00000001,
+        MARK_IN_SYNC = 0x00000002,
+        SUPERSEDE = 0x00000004,
+        ALWAYS_FULL = 0x00000008,
+    }
+
+    /// <summary>CF_CREATE_FLAGS — the CreateFlags argument of CfCreatePlaceholders.</summary>
+    [Flags]
+    internal enum CF_CREATE_FLAGS : uint
+    {
+        NONE = 0x00000000,
+        STOP_ON_ERROR = 0x00000001,
+    }
+
+    /// <summary>CF_OPERATION_TYPE — the operation passed to CfExecute.</summary>
+    internal enum CF_OPERATION_TYPE : int
+    {
+        TRANSFER_DATA = 0,
+        RETRIEVE_DATA = 1,
+        ACK_DATA = 2,
+        RESTART_HYDRATION = 3,
+        TRANSFER_PLACEHOLDERS = 4,
+        ACK_DEHYDRATE = 5,
+        ACK_DELETE = 6,
+        ACK_RENAME = 7,
+    }
+
+    /// <summary>CF_IN_SYNC_STATE — used with CfSetInSyncState.</summary>
+    internal enum CF_IN_SYNC_STATE : int
+    {
+        NOT_IN_SYNC = 0,
+        IN_SYNC = 1,
+    }
+
+    /// <summary>CF_CALLBACK_DELETE_FLAGS — flags in the NOTIFY_DELETE parameters.</summary>
+    [Flags]
+    internal enum CF_CALLBACK_DELETE_FLAGS : int
+    {
+        NONE = 0x00000000,
+        IS_DIRECTORY = 0x00000001,
+        IS_UNDELETE = 0x00000002,
+    }
+
+    /// <summary>CF_CALLBACK_RENAME_FLAGS — flags in the NOTIFY_RENAME parameters.</summary>
+    [Flags]
+    internal enum CF_CALLBACK_RENAME_FLAGS : int
+    {
+        NONE = 0x00000000,
+        IS_DIRECTORY = 0x00000001,
+        SOURCE_IN_SCOPE = 0x00000002,
+        TARGET_IN_SCOPE = 0x00000004,
     }
 
     // =========================================================================
-    // Native structures
+    // Registration structures
     // =========================================================================
 
     /// <summary>
-    /// Contains platform version information.
-    /// Maps to CF_PLATFORM_INFO in cfapi.h.
+    /// CF_HYDRATION_POLICY — a struct of two USHORTs (primary + modifier), NOT a single enum.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_PLATFORM_INFO
+    internal struct CF_HYDRATION_POLICY
     {
-        /// <summary>Windows build number (e.g., 22000 for Windows 11).</summary>
-        internal uint BuildNumber;
-
-        /// <summary>Windows revision number.</summary>
-        internal uint RevisionNumber;
-
-        /// <summary>Integration number for platform feature level.</summary>
-        internal uint IntegrationNumber;
+        internal CF_HYDRATION_POLICY_PRIMARY Primary;
+        internal CF_HYDRATION_POLICY_MODIFIER Modifier;
     }
 
     /// <summary>
-    /// File system metadata for a placeholder file or directory.
-    /// Maps to CF_FS_METADATA in cfapi.h.
+    /// CF_POPULATION_POLICY — a struct of two USHORTs (primary + modifier).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_FS_METADATA
+    internal struct CF_POPULATION_POLICY
     {
-        /// <summary>Basic file information (attributes, timestamps).</summary>
-        internal FILE_BASIC_INFO BasicInfo;
-
-        /// <summary>File size in bytes.</summary>
-        internal long FileSize;
+        internal CF_POPULATION_POLICY_PRIMARY Primary;
+        internal CF_POPULATION_POLICY_MODIFIER Modifier;
     }
 
     /// <summary>
-    /// Basic file information structure compatible with Win32 FILE_BASIC_INFO.
+    /// CF_SYNC_POLICIES — the policy block passed as the 3rd argument to CfRegisterSyncRoot.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal struct FILE_BASIC_INFO
+    internal struct CF_SYNC_POLICIES
     {
-        /// <summary>File creation time (Windows FILETIME as long).</summary>
-        internal long CreationTime;
-
-        /// <summary>Last access time (Windows FILETIME as long).</summary>
-        internal long LastAccessTime;
-
-        /// <summary>Last write time (Windows FILETIME as long).</summary>
-        internal long LastWriteTime;
-
-        /// <summary>Last attribute change time (Windows FILETIME as long).</summary>
-        internal long ChangeTime;
-
-        /// <summary>File attribute flags (FILE_ATTRIBUTE_*).</summary>
-        internal uint FileAttributes;
-    }
-
-    /// <summary>
-    /// Information about a placeholder to be created.
-    /// Maps to CF_PLACEHOLDER_CREATE_INFO in cfapi.h.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_PLACEHOLDER_CREATE_INFO
-    {
-        /// <summary>Relative path from the sync root (e.g., "folder\file.txt").</summary>
-        [MarshalAs(UnmanagedType.LPWStr)]
-        internal string RelativePath;
-
-        /// <summary>File system metadata for the placeholder.</summary>
-        internal CF_FS_METADATA FsMetadata;
-
-        /// <summary>Creation flags (e.g., CF_CREATE_FLAGS.MARK_IN_SYNC).</summary>
-        internal CF_CREATE_FLAGS Flags;
-    }
-
-    /// <summary>
-    /// Callback information provided by the platform when invoking sync provider callbacks.
-    /// Maps to CF_CALLBACK in cfapi.h. Contains context about the operation being requested.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_CALLBACK
-    {
-        /// <summary>Size of this structure.</summary>
+        /// <summary>Size of this structure in bytes (ULONG). Must be set by the caller.</summary>
         internal uint StructSize;
 
-        /// <summary>Type of callback being invoked.</summary>
-        internal CF_CALLBACK_TYPE Type;
-
-        /// <summary>Flags for the callback operation.</summary>
-        internal uint CallbackFlags;
-
-        /// <summary>Volume GUID name for the volume containing the file.</summary>
-        internal Guid VolumeGuidName;
-
-        /// <summary>File system file ID for the target file.</summary>
-        internal long SyncRootFileId;
-
-        /// <summary>File system file ID for the specific file.</summary>
-        internal long FileId;
-
-        /// <summary>Total file size in bytes.</summary>
-        internal long FileSize;
-
-        /// <summary>Transfer key for data transfer operations.</summary>
-        internal CF_TRANSFER_KEY TransferKey;
-
-        /// <summary>Priority of the fetch request.</summary>
-        internal int PriorityHint;
-
-        /// <summary>Alignment padding.</summary>
-        internal uint _Padding;
-
-        /// <summary>Process ID of the application requesting the operation.</summary>
-        internal uint ProcessId;
-
-        /// <summary>Thread ID of the application requesting the operation.</summary>
-        internal uint ThreadId;
-
-        /// <summary>Pointer to additional operation parameters (type-specific).</summary>
-        internal IntPtr OperationParameters;
+        internal CF_HYDRATION_POLICY Hydration;
+        internal CF_POPULATION_POLICY Population;
+        internal CF_INSYNC_POLICY InSync;
+        internal CF_HARDLINK_POLICY HardLink;
+        internal CF_PLACEHOLDER_MANAGEMENT_POLICY PlaceholderManagement;
     }
 
     /// <summary>
-    /// Parameters for FETCH_DATA callbacks.
-    /// Maps to CF_OPERATION_PARAMETERS.FETCH_DATA in cfapi.h.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_OPERATION_PARAMETERS_FETCH_DATA
-    {
-        /// <summary>Byte offset to start reading from.</summary>
-        internal long Offset;
-
-        /// <summary>Number of bytes requested.</summary>
-        internal long Length;
-    }
-
-    /// <summary>
-    /// Parameters for FETCH_PLACEHOLDERS callbacks.
-    /// Maps to CF_OPERATION_PARAMETERS.FETCH_PLACEHOLDERS in cfapi.h.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_OPERATION_PARAMETERS_FETCH_PLACEHOLDERS
-    {
-        /// <summary>Pattern for directory enumeration.</summary>
-        internal uint PatternLength;
-
-        /// <summary>Pattern string pointer.</summary>
-        internal IntPtr Pattern;
-    }
-
-    // =========================================================================
-    // Native callback delegates
-    // =========================================================================
-
-    /// <summary>
-    /// Native callback function signature for CfAPI callbacks.
-    /// This delegate matches the CALLBACK_FUNCTION typedef in cfapi.h.
-    /// </summary>
-    /// <param name="callbackInfo">Information about the callback invocation.</param>
-    /// <param name="context">User-provided context pointer (the sync root path).</param>
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    internal unsafe delegate void CF_CALLBACK_DELEGATE(
-        CF_CALLBACK* callbackInfo,
-        IntPtr context);
-
-    /// <summary>
-    /// Registration entry mapping a callback type to its handler function.
-    /// Maps to CF_CALLBACK_REGISTRATION in cfapi.h.
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CF_CALLBACK_REGISTRATION
-    {
-        /// <summary>The type of callback this entry handles.</summary>
-        internal CF_CALLBACK_TYPE Type;
-
-        /// <summary>Pointer to the native callback function.</summary>
-        internal IntPtr Callback;
-    }
-
-    // =========================================================================
-    // Sync registration structure
-    // =========================================================================
-
-    /// <summary>
-    /// Native registration parameters for CfRegisterSyncRoot.
-    /// Maps to CF_SYNC_REGISTRATION in cfapi.h.
-    ///
-    /// IMPORTANT: StructSize is USHORT (2 bytes) in the native header, NOT UINT.
-    /// Using uint causes struct layout mismatch and E_INVALIDARG (0x80070057).
+    /// CF_SYNC_REGISTRATION — provider identity passed as the 2nd argument to CfRegisterSyncRoot.
+    /// Contains NO policy fields; those live in <see cref="CF_SYNC_POLICIES"/>.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct CF_SYNC_REGISTRATION
     {
-        /// <summary>Size of this structure in bytes. MUST be ushort to match cfapi.h.</summary>
-        internal ushort StructSize;
+        /// <summary>Size of this structure in bytes (ULONG). Must be set by the caller.</summary>
+        internal uint StructSize;
 
-        /// <summary>Provider display name (LPCWSTR in cfapi.h).</summary>
+        /// <summary>End-user facing provider name (max 255 chars).</summary>
         [MarshalAs(UnmanagedType.LPWStr)]
         internal string? ProviderName;
 
-        /// <summary>Provider version string (LPCWSTR in cfapi.h).</summary>
+        /// <summary>End-user facing provider version (max 255 chars).</summary>
         [MarshalAs(UnmanagedType.LPWStr)]
         internal string? ProviderVersion;
 
-        /// <summary>File system file ID of the sync root directory.</summary>
+        /// <summary>Optional opaque sync-root identity blob (LPCVOID).</summary>
+        internal IntPtr SyncRootIdentity;
+
+        /// <summary>Length in bytes of <see cref="SyncRootIdentity"/>.</summary>
+        internal uint SyncRootIdentityLength;
+
+        /// <summary>Optional opaque file identity blob (LPCVOID).</summary>
+        internal IntPtr FileIdentity;
+
+        /// <summary>Length in bytes of <see cref="FileIdentity"/>.</summary>
+        internal uint FileIdentityLength;
+
+        /// <summary>Optional provider GUID. Empty lets the platform derive one from the name.</summary>
+        internal Guid ProviderId;
+    }
+
+    /// <summary>CF_PLATFORM_INFO — returned by CfGetPlatformInfo / CfRegisterSyncRoot.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CF_PLATFORM_INFO
+    {
+        internal uint BuildNumber;
+        internal uint RevisionNumber;
+        internal uint IntegrationNumber;
+    }
+
+    // =========================================================================
+    // Callback structures
+    // =========================================================================
+
+    /// <summary>
+    /// CF_CALLBACK_INFO — the first pointer passed to every CfAPI callback.
+    /// Carries the connection key, the callback context registered at connect time,
+    /// volume/path strings, file IDs, the transfer key, and process info.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CF_CALLBACK_INFO
+    {
+        internal uint StructSize;
+
+        /// <summary>CF_CONNECTION_KEY (opaque LONGLONG) for the active connection.</summary>
+        internal long ConnectionKey;
+
+        /// <summary>The CallbackContext pointer supplied to CfConnectSyncRoot.</summary>
+        internal IntPtr CallbackContext;
+
+        /// <summary>PCWSTR volume GUID name, e.g. "\\?\Volume{...}".</summary>
+        internal IntPtr VolumeGuidName;
+
+        /// <summary>PCWSTR volume DOS name, e.g. "C:\".</summary>
+        internal IntPtr VolumeDosName;
+
+        internal uint VolumeSerialNumber;
+
+        /// <summary>LARGE_INTEGER file id of the sync root directory.</summary>
         internal long SyncRootFileId;
 
-        /// <summary>File system type (reserved).</summary>
-        internal uint FileSystem;
+        internal IntPtr SyncRootIdentity;
+        internal uint SyncRootIdentityLength;
 
-        /// <summary>Primary hydration policy.</summary>
-        internal CF_HYDRATION_POLICY HydrationPolicy;
+        /// <summary>LARGE_INTEGER file id of the file the callback concerns.</summary>
+        internal long FileId;
 
-        /// <summary>Hydration policy modifier.</summary>
-        internal CF_HYDRATION_POLICY_MODIFIER HydrationPolicyModifier;
+        /// <summary>LARGE_INTEGER total size of the file.</summary>
+        internal long FileSize;
 
-        /// <summary>Population policy.</summary>
-        internal CF_POPULATION_POLICY PopulationPolicy;
+        internal IntPtr FileIdentity;
+        internal uint FileIdentityLength;
 
-        /// <summary>In-sync tracking policy.</summary>
-        internal uint InSyncPolicy;
+        /// <summary>
+        /// PCWSTR normalized full path of the file. Populated when the connection
+        /// requested CF_CONNECT_FLAG_REQUIRE_FULL_FILE_PATH.
+        /// </summary>
+        internal IntPtr NormalizedPath;
 
-        /// <summary>Registration flags.</summary>
-        internal CF_REGISTER_FLAGS Flags;
+        /// <summary>CF_TRANSFER_KEY (LARGE_INTEGER) for the pending transfer.</summary>
+        internal long TransferKey;
 
-        /// <summary>Placeholder management capabilities.</summary>
-        internal uint PlaceholderManagementCapabilities;
+        internal byte PriorityHint;
+
+        internal IntPtr CorrelationVector;
+        internal IntPtr ProcessInfo;
+
+        /// <summary>CF_REQUEST_KEY (LARGE_INTEGER) echoed back into CfExecute.</summary>
+        internal long RequestKey;
+    }
+
+    /// <summary>
+    /// CF_CALLBACK_PARAMETERS FETCH_DATA view (the parameter block is a C union; this
+    /// overlays the FetchData member using explicit byte offsets from cfapi.h).
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct CF_CALLBACK_PARAMETERS_FETCH_DATA
+    {
+        [FieldOffset(0)] internal uint ParamSize;
+        [FieldOffset(8)] internal int Flags;
+        [FieldOffset(16)] internal long RequiredFileOffset;
+        [FieldOffset(24)] internal long RequiredLength;
+        [FieldOffset(32)] internal long OptionalFileOffset;
+        [FieldOffset(40)] internal long OptionalLength;
+        [FieldOffset(48)] internal long LastDehydrationTime;
+        [FieldOffset(56)] internal int LastDehydrationReason;
+    }
+
+    /// <summary>
+    /// CF_CALLBACK_PARAMETERS FETCH_PLACEHOLDERS view. <see cref="Pattern"/> is a PCWSTR.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct CF_CALLBACK_PARAMETERS_FETCH_PLACEHOLDERS
+    {
+        [FieldOffset(0)] internal uint ParamSize;
+        [FieldOffset(8)] internal int Flags;
+        [FieldOffset(16)] internal IntPtr Pattern;
+    }
+
+    /// <summary>
+    /// CF_CALLBACK_PARAMETERS NOTIFY_RENAME view. <see cref="TargetPath"/> is a PCWSTR
+    /// holding the new (post-rename) full path.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct CF_CALLBACK_PARAMETERS_RENAME
+    {
+        [FieldOffset(0)] internal uint ParamSize;
+        [FieldOffset(8)] internal int Flags;
+        [FieldOffset(16)] internal IntPtr TargetPath;
+    }
+
+    /// <summary>CF_CALLBACK_REGISTRATION — one row of the connect-time callback table.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CF_CALLBACK_REGISTRATION
+    {
+        internal CF_CALLBACK_TYPE Type;
+        internal IntPtr Callback;
+    }
+
+    // =========================================================================
+    // Placeholder structures
+    // =========================================================================
+
+    /// <summary>Win32 FILE_BASIC_INFO (LARGE_INTEGER ×4 + DWORD attributes).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FILE_BASIC_INFO
+    {
+        internal long CreationTime;
+        internal long LastAccessTime;
+        internal long LastWriteTime;
+        internal long ChangeTime;
+        internal uint FileAttributes;
+    }
+
+    /// <summary>CF_FS_METADATA — basic info plus file size.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CF_FS_METADATA
+    {
+        internal FILE_BASIC_INFO BasicInfo;
+        internal long FileSize;
+    }
+
+    /// <summary>
+    /// CF_PLACEHOLDER_CREATE_INFO — one entry for CfCreatePlaceholders.
+    /// <see cref="Result"/> and <see cref="CreateUsn"/> are written back by the API.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct CF_PLACEHOLDER_CREATE_INFO
+    {
+        /// <summary>Relative file name from the base directory (backslash separated).</summary>
+        [MarshalAs(UnmanagedType.LPWStr)]
+        internal string RelativeFileName;
+
+        internal CF_FS_METADATA FsMetadata;
+
+        internal IntPtr FileIdentity;
+        internal uint FileIdentityLength;
+
+        internal CF_PLACEHOLDER_CREATE_FLAGS Flags;
+
+        /// <summary>Per-entry HRESULT written back by the API.</summary>
+        internal int Result;
+
+        /// <summary>USN written back by the API.</summary>
+        internal long CreateUsn;
+    }
+
+    // =========================================================================
+    // CfExecute operation structures
+    // =========================================================================
+
+    /// <summary>CF_OPERATION_INFO — describes the operation handed to CfExecute.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct CF_OPERATION_INFO
+    {
+        internal uint StructSize;
+        internal CF_OPERATION_TYPE Type;
+        internal long ConnectionKey;
+        internal long TransferKey;
+        internal IntPtr CorrelationVector;
+        internal IntPtr SyncStatus;
+        internal long RequestKey;
+    }
+
+    /// <summary>
+    /// CF_OPERATION_PARAMETERS TRANSFER_DATA view (union overlay with explicit offsets).
+    /// Used to deliver downloaded bytes back to the platform.
+    ///
+    /// <para>
+    /// The native <c>CF_OPERATION_PARAMETERS</c> is a union sized by its largest member
+    /// (<c>RetrieveData</c>, 40 bytes of payload), making the whole struct 48 bytes
+    /// including the leading <c>ParamSize</c>. <c>CfExecute</c> validates that
+    /// <c>ParamSize == sizeof(CF_OPERATION_PARAMETERS)</c>, so the trailing
+    /// <see cref="_UnionPad"/> field exists purely to size this overlay to 48 bytes —
+    /// matching the real union — rather than the 40 bytes the TransferData member alone
+    /// would occupy.
+    /// </para>
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct CF_OPERATION_PARAMETERS_TRANSFER_DATA
+    {
+        [FieldOffset(0)] internal uint ParamSize;
+        [FieldOffset(8)] internal int Flags;
+
+        /// <summary>NTSTATUS completion status. 0 = success; non-zero reports an error.</summary>
+        [FieldOffset(12)] internal int CompletionStatus;
+
+        /// <summary>LPCVOID pointer to the data buffer (null when reporting an error).</summary>
+        [FieldOffset(16)] internal IntPtr Buffer;
+
+        [FieldOffset(24)] internal long Offset;
+        [FieldOffset(32)] internal long Length;
+
+        /// <summary>
+        /// Padding mirroring the union's largest member (RetrieveData.ReturnedLength) so that
+        /// <c>sizeof</c> this overlay equals the real <c>CF_OPERATION_PARAMETERS</c> size (48).
+        /// </summary>
+        [FieldOffset(40)] internal long _UnionPad;
     }
 
     // =========================================================================
     // Win32 structures for FileId resolution
     // =========================================================================
 
-    /// <summary>
-    /// Windows FILETIME structure (100-nanosecond intervals since January 1, 1601).
-    /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct FILETIME
-    {
-        /// <summary>Low-order 32 bits of the file time.</summary>
-        internal uint DateTimeLow;
-
-        /// <summary>High-order 32 bits of the file time.</summary>
-        internal uint DateTimeHigh;
-    }
-
-    /// <summary>
-    /// Contains file system metadata retrieved by <c>GetFileInformationByHandle</c>.
-    /// The <c>FileIndexHigh</c>/<c>FileIndexLow</c> fields provide the NTFS file index
-    /// which corresponds to the <c>FileId</c> used in CfAPI callbacks.
-    /// </summary>
+    /// <summary>BY_HANDLE_FILE_INFORMATION — used to derive the NTFS file index (FileId).</summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct BY_HANDLE_FILE_INFORMATION
     {
-        /// <summary>File attribute flags (FILE_ATTRIBUTE_*).</summary>
         internal uint FileAttributes;
-
-        /// <summary>File creation time.</summary>
-        internal FILETIME CreationTime;
-
-        /// <summary>Last access time.</summary>
-        internal FILETIME LastAccessTime;
-
-        /// <summary>Last write time.</summary>
-        internal FILETIME LastWriteTime;
-
-        /// <summary>Serial number of the volume containing the file.</summary>
+        internal long CreationTime;
+        internal long LastAccessTime;
+        internal long LastWriteTime;
         internal uint VolumeSerialNumber;
-
-        /// <summary>High-order 32 bits of the file size.</summary>
         internal uint FileSizeHigh;
-
-        /// <summary>Low-order 32 bits of the file size.</summary>
         internal uint FileSizeLow;
-
-        /// <summary>Number of hard links to the file.</summary>
         internal uint NumberOfLinks;
-
-        /// <summary>High-order 32 bits of the NTFS file index (FileId).</summary>
         internal uint FileIndexHigh;
-
-        /// <summary>Low-order 32 bits of the NTFS file index (FileId).</summary>
         internal uint FileIndexLow;
     }
 }
