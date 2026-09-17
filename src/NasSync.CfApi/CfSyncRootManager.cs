@@ -4,23 +4,26 @@ using NasSync.CfApi.Interop;
 namespace NasSync.CfApi;
 
 /// <summary>
-/// Managed wrapper for the Windows Cloud Filter API (CfAPI) sync root lifecycle.
+/// Managed wrapper for the Windows Cloud Files API (CfAPI) sync root lifecycle.
 /// Handles registering, unregistering, connecting, and disconnecting sync roots
 /// with the Windows Shell and the cldflt.sys minifilter driver.
 ///
 /// <para>
 /// Registration is a two-step process:
 /// 1. <c>CfRegisterSyncRoot</c> (native) — registers the sync root with cldflt.sys,
-///    configures hydration/population policies, and sets up the file system filter.
+///    supplying the provider identity (<c>CF_SYNC_REGISTRATION</c>), the policy block
+///    (<c>CF_SYNC_POLICIES</c>), and register flags.
 /// 2. WinRT <c>StorageProviderSyncRootManager</c> — optional but recommended for
 ///    navigation pane integration (branded icon, display name, quota UI).
 /// </para>
 ///
 /// <para>
 /// After registration, <c>ConnectAsync</c> begins receiving callbacks from the platform
-/// when applications access placeholder files (hydration) or modify files under the sync root.
-/// Callback state is passed via a pinned <see cref="CallbackContext"/> object through
-/// <c>GCHandle</c> to the native context pointer.
+/// when applications access placeholder files (hydration) or modify files under the sync
+/// root. Each native callback has the signature
+/// <c>void(CF_CALLBACK_INFO*, CF_CALLBACK_PARAMETERS*)</c>. The provider context is passed
+/// back inside <c>CF_CALLBACK_INFO.CallbackContext</c> as a <see cref="GCHandle"/> pointer
+/// to a <see cref="CallbackContext"/>.
 /// </para>
 /// </summary>
 public sealed class CfSyncRootManager : IDisposable
@@ -30,7 +33,7 @@ public sealed class CfSyncRootManager : IDisposable
     private bool _isConnected;
     private string? _syncRootPath;
     private string? _syncRootId;
-    private CfNativeTypes.CF_CONNECTION_KEY _connectionKey;
+    private long _connectionKey;
 
     /// <summary>
     /// Stored reference to the callback handler to prevent garbage collection
@@ -39,20 +42,13 @@ public sealed class CfSyncRootManager : IDisposable
     private ICfCallbackHandler? _callbackHandler;
 
     /// <summary>
-    /// Pinned delegate references for native callbacks.
-    /// These must be kept alive for the duration of the connection.
-    /// </summary>
-    private readonly List<GCHandle> _pinnedDelegates = [];
-
-    /// <summary>
-    /// Bidirectional file ID to path resolver. Populated after placeholder creation
-    /// and used by callback dispatchers to resolve file paths from FileId values.
+    /// Bidirectional file ID to path resolver. Used as a fallback when a callback does
+    /// not carry a normalized path (i.e., the connection did not request full file paths).
     /// </summary>
     private readonly PathResolver _pathResolver = new();
 
     /// <summary>
-    /// The callback context passed to native callbacks via GCHandle.
-    /// Contains references to the handler, path resolver, and hydration provider.
+    /// The callback context passed to native callbacks via its <see cref="GCHandle"/> pointer.
     /// </summary>
     private CallbackContext? _callbackContext;
 
@@ -61,6 +57,11 @@ public sealed class CfSyncRootManager : IDisposable
     /// while the sync root is connected.
     /// </summary>
     private GCHandle _contextHandle;
+
+    /// <summary>
+    /// GCHandle pinning the native callback registration table for the connection's lifetime.
+    /// </summary>
+    private GCHandle _callbackTableHandle;
 
     /// <summary>
     /// Gets whether a sync root is currently registered with the OS.
@@ -79,7 +80,7 @@ public sealed class CfSyncRootManager : IDisposable
 
     /// <summary>
     /// Gets the unique sync root identifier registered with Windows.
-    /// Format: <c>[ProviderId]![UserSid]![AccountId]</c>
+    /// Format: <c>[ProviderId]![UserSid]![AccountId]</c>.
     /// </summary>
     public string? SyncRootId => _syncRootId;
 
@@ -91,13 +92,6 @@ public sealed class CfSyncRootManager : IDisposable
 
     /// <summary>
     /// Registers a new sync root with the Windows Cloud Filter platform.
-    ///
-    /// <para>This method:</para>
-    /// <list type="number">
-    ///   <item>Creates the sync root directory if it does not exist.</item>
-    ///   <item>Calls <c>CfRegisterSyncRoot</c> to register with cldflt.sys.</item>
-    ///   <item>Sets up the navigation pane entry via WinRT (if available).</item>
-    /// </list>
     /// </summary>
     /// <param name="registrationInfo">The sync root registration configuration.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
@@ -117,71 +111,88 @@ public sealed class CfSyncRootManager : IDisposable
                 "A sync root is already registered. Call UnregisterAsync first.");
         }
 
-        // Step 1: Ensure the sync root directory exists
+        // Step 1: Ensure the sync root directory exists.
         Directory.CreateDirectory(registrationInfo.SyncRootPath);
 
-        // Step 1.5: Clean up any existing registration for this path
-        // This handles the case where a previous run left a stale registration
+        // Step 1.5: Clean up any stale registration for this path left by a previous run.
+        // The provider must have WRITE_DATA/WRITE_DAC access; ignoring the result is safe
+        // because CfUnregisterSyncRoot fails harmlessly when nothing is registered.
         try
         {
-            string existingId = SyncRootIdHelper.Build(registrationInfo.ProviderId, registrationInfo.AccountId);
             int unregHr = CfNativeMethods.CfUnregisterSyncRoot(registrationInfo.SyncRootPath);
             if (unregHr == 0)
             {
                 System.Diagnostics.Debug.WriteLine(
-                    $"[CfSyncRootManager] Cleaned up existing registration for '{registrationInfo.SyncRootPath}'");
+                    $"[CfSyncRootManager] Cleaned up stale registration for '{registrationInfo.SyncRootPath}'.");
             }
         }
         catch
         {
-            // Ignore — no existing registration to clean up
+            // Ignore — no existing registration to clean up.
         }
 
-        System.Diagnostics.Debug.WriteLine(
-            $"[CfSyncRootManager] Registering sync root: Path='{registrationInfo.SyncRootPath}', " +
-            $"DisplayName='{registrationInfo.DisplayName}', " +
-            $"IconResource='{registrationInfo.IconResource}', " +
-            $"HydrationPolicy={registrationInfo.HydrationPolicy}, " +
-            $"PopulationPolicy={registrationInfo.PopulationPolicy}");
+        string displayName = string.IsNullOrEmpty(registrationInfo.DisplayName)
+            ? "NAS Cloud Sync"
+            : registrationInfo.DisplayName;
 
-        // Log struct layout diagnostics for ARM64 debugging
-        int structSize = System.Runtime.InteropServices.Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>();
-        System.Diagnostics.Debug.WriteLine(
-            $"[CfSyncRootManager] CF_SYNC_REGISTRATION struct size: {structSize} bytes " +
-            $"(IntPtr.Size={IntPtr.Size}, Arch={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture})");
-
-        // Step 2: Build the native registration structure
+        // Step 2: Build the native registration (provider identity) structure.
         var nativeRegistration = new CfNativeTypes.CF_SYNC_REGISTRATION
         {
-            StructSize = (ushort)Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>(),
-            ProviderName = registrationInfo.DisplayName,
-            ProviderVersion = registrationInfo.Version,
-            HydrationPolicy = (CfNativeTypes.CF_HYDRATION_POLICY)registrationInfo.HydrationPolicy,
-            HydrationPolicyModifier =
-                (CfNativeTypes.CF_HYDRATION_POLICY_MODIFIER)registrationInfo.HydrationPolicyModifier,
-            PopulationPolicy = (CfNativeTypes.CF_POPULATION_POLICY)registrationInfo.PopulationPolicy,
-            Flags = CfNativeTypes.CF_REGISTER_FLAGS.NONE,
+            StructSize = (uint)Marshal.SizeOf<CfNativeTypes.CF_SYNC_REGISTRATION>(),
+            ProviderName = displayName,
+            ProviderVersion = string.IsNullOrEmpty(registrationInfo.Version) ? "1.0" : registrationInfo.Version,
+            SyncRootIdentity = IntPtr.Zero,
+            SyncRootIdentityLength = 0,
+            FileIdentity = IntPtr.Zero,
+            FileIdentityLength = 0,
+            ProviderId = Guid.Empty, // Optional — the platform derives one from ProviderName.
         };
 
-        // Step 3: Call native CfRegisterSyncRoot
+        // Step 3: Build the policy block. Managed enum values are aligned to the native
+        // CF_*_POLICY values (see SyncRootRegistrationInfo.cs), so these casts are exact.
+        var nativePolicies = new CfNativeTypes.CF_SYNC_POLICIES
+        {
+            StructSize = (uint)Marshal.SizeOf<CfNativeTypes.CF_SYNC_POLICIES>(),
+            Hydration = new CfNativeTypes.CF_HYDRATION_POLICY
+            {
+                Primary = (CfNativeTypes.CF_HYDRATION_POLICY_PRIMARY)registrationInfo.HydrationPolicy,
+                Modifier = (CfNativeTypes.CF_HYDRATION_POLICY_MODIFIER)registrationInfo.HydrationPolicyModifier,
+            },
+            Population = new CfNativeTypes.CF_POPULATION_POLICY
+            {
+                Primary = (CfNativeTypes.CF_POPULATION_POLICY_PRIMARY)registrationInfo.PopulationPolicy,
+                Modifier = CfNativeTypes.CF_POPULATION_POLICY_MODIFIER.NONE,
+            },
+            InSync = CfNativeTypes.CF_INSYNC_POLICY.TRACK_ALL,
+            HardLink = CfNativeTypes.CF_HARDLINK_POLICY.NONE,
+            PlaceholderManagement = CfNativeTypes.CF_PLACEHOLDER_MANAGEMENT_POLICY.DEFAULT,
+        };
+
+        System.Diagnostics.Debug.WriteLine(
+            $"[CfSyncRootManager] CfRegisterSyncRoot: Path='{registrationInfo.SyncRootPath}', " +
+            $"Name='{displayName}', RegSize={nativeRegistration.StructSize}, " +
+            $"PolSize={nativePolicies.StructSize}, " +
+            $"Hydration={nativePolicies.Hydration.Primary}|{nativePolicies.Hydration.Modifier}, " +
+            $"Population={nativePolicies.Population.Primary}, Arch={RuntimeInformation.ProcessArchitecture}");
+
+        // Step 4: Call native CfRegisterSyncRoot.
         int hr = CfNativeMethods.CfRegisterSyncRoot(
             registrationInfo.SyncRootPath,
             ref nativeRegistration,
-            out CfNativeTypes.CF_PLATFORM_INFO platformInfo);
+            ref nativePolicies,
+            CfNativeTypes.CF_REGISTER_FLAGS.NONE);
 
         if (hr != 0)
         {
-            string details = $"Path='{registrationInfo.SyncRootPath}', " +
-                $"DisplayName='{registrationInfo.DisplayName}', " +
-                $"IconResource='{registrationInfo.IconResource}', " +
-                $"ProviderId='{registrationInfo.ProviderId}', " +
-                $"AccountId='{registrationInfo.AccountId}'";
-
             throw new CfApiException("CfRegisterSyncRoot", hr,
-                $"Failed to register sync root. {details}");
+                $"Failed to register sync root. Path='{registrationInfo.SyncRootPath}', " +
+                $"DisplayName='{displayName}', ProviderId='{registrationInfo.ProviderId}', " +
+                $"AccountId='{registrationInfo.AccountId}', " +
+                $"RegSize={nativeRegistration.StructSize}, PolSize={nativePolicies.StructSize}, " +
+                $"Arch={RuntimeInformation.ProcessArchitecture}");
         }
 
-        // Step 4: Store registration state
+        // Step 5: Store registration state.
         _syncRootPath = registrationInfo.SyncRootPath;
         _syncRootId = SyncRootIdHelper.Build(registrationInfo.ProviderId, registrationInfo.AccountId);
         _isRegistered = true;
@@ -191,7 +202,6 @@ public sealed class CfSyncRootManager : IDisposable
 
     /// <summary>
     /// Unregisters the sync root from the Windows Cloud Filter platform.
-    /// Removes the navigation pane entry and cleans up all placeholder files.
     /// </summary>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous unregistration operation.</returns>
@@ -205,13 +215,12 @@ public sealed class CfSyncRootManager : IDisposable
             throw new InvalidOperationException("No sync root is currently registered.");
         }
 
-        // Disconnect first if still connected
+        // Disconnect first if still connected.
         if (_isConnected)
         {
             await DisconnectAsync();
         }
 
-        // Call native CfUnregisterSyncRoot
         int hr = CfNativeMethods.CfUnregisterSyncRoot(_syncRootPath);
 
         if (hr != 0)
@@ -220,7 +229,6 @@ public sealed class CfSyncRootManager : IDisposable
                 $"Failed to unregister sync root at '{_syncRootPath}'.");
         }
 
-        // Clear registration state
         _pathResolver.Clear();
         _syncRootPath = null;
         _syncRootId = null;
@@ -230,15 +238,6 @@ public sealed class CfSyncRootManager : IDisposable
     /// <summary>
     /// Connects the sync root to begin receiving hydration and file operation callbacks
     /// from the cldflt.sys minifilter driver.
-    ///
-    /// <para>
-    /// After connecting, the platform will invoke the appropriate callback on
-    /// <paramref name="callbacks"/> when:
-    /// - An application opens a placeholder file (FetchData — triggers hydration)
-    /// - A directory needs to be populated (FetchPlaceholders)
-    /// - A file is deleted, renamed, or dehydrated
-    /// - A hydration operation is cancelled
-    /// </para>
     /// </summary>
     /// <param name="callbacks">
     /// The callback handler that will process sync events from the platform.
@@ -247,7 +246,7 @@ public sealed class CfSyncRootManager : IDisposable
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>A task representing the asynchronous connect operation.</returns>
     /// <exception cref="InvalidOperationException">Thrown if not registered or already connected.</exception>
-    public Task ConnectAsync(ICfCallbackHandler callbacks, CancellationToken cancellationToken = default)
+    public unsafe Task ConnectAsync(ICfCallbackHandler callbacks, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -264,7 +263,7 @@ public sealed class CfSyncRootManager : IDisposable
 
         _callbackHandler = callbacks ?? throw new ArgumentNullException(nameof(callbacks));
 
-        // Create the callback context and pin it via GCHandle
+        // Create the callback context and pin it via GCHandle.
         _callbackContext = new CallbackContext
         {
             Handler = callbacks,
@@ -274,37 +273,35 @@ public sealed class CfSyncRootManager : IDisposable
         };
         _contextHandle = GCHandle.Alloc(_callbackContext);
 
-        // Build the callback registration table
-        var callbackEntries = BuildCallbackTable();
+        // Build the callback registration table (terminated by a NONE row) and pin it.
+        CfNativeTypes.CF_CALLBACK_REGISTRATION[] table = BuildCallbackTable();
+        _callbackTableHandle = GCHandle.Alloc(table, GCHandleType.Pinned);
 
-        // Connect with flags to receive process info in callbacks
+        // Request full file paths + process info so callbacks carry NormalizedPath.
         int hr = CfNativeMethods.CfConnectSyncRoot(
             _syncRootPath,
-            callbackEntries,
-            (uint)callbackEntries.Length,
-            CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_PROCESS_INFO |
-                CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_FULL_IMAGE_PATH,
+            (CfNativeTypes.CF_CALLBACK_REGISTRATION*)_callbackTableHandle.AddrOfPinnedObject(),
             GCHandle.ToIntPtr(_contextHandle),
+            CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_PROCESS_INFO |
+                CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_FULL_FILE_PATH,
             out _connectionKey);
 
         if (hr != 0)
         {
-            // Clean up on failure
-            _contextHandle.Free();
-            _callbackContext = null;
-            ReleasePinnedDelegates();
+            FreeConnectResources();
             throw new CfApiException("CfConnectSyncRoot", hr,
                 "Failed to connect sync root for callbacks.");
         }
 
+        // Make the connection key available to the hydration provider via the context.
+        _callbackContext.ConnectionKey = _connectionKey;
         _isConnected = true;
         return Task.CompletedTask;
     }
 
     /// <summary>
-    /// Disconnects the sync root from receiving callbacks.
-    /// Placeholder files remain visible in the file system, but no further
-    /// hydration or notification callbacks will fire until reconnected.
+    /// Disconnects the sync root from receiving callbacks. Placeholder files remain
+    /// visible in the file system, but no further callbacks fire until reconnected.
     /// </summary>
     /// <returns>A task representing the asynchronous disconnect operation.</returns>
     /// <exception cref="InvalidOperationException">Thrown if not connected.</exception>
@@ -326,17 +323,8 @@ public sealed class CfSyncRootManager : IDisposable
         }
 
         _isConnected = false;
-        _callbackHandler = null;
-
-        // Free the context handle
-        if (_contextHandle.IsAllocated)
-        {
-            _contextHandle.Free();
-        }
-
-        _callbackContext = null;
-        ReleasePinnedDelegates();
-
+        _connectionKey = 0;
+        FreeConnectResources();
         return Task.CompletedTask;
     }
 
@@ -348,7 +336,6 @@ public sealed class CfSyncRootManager : IDisposable
             return;
         }
 
-        // Best-effort cleanup: disconnect and release pinned delegates
         if (_isConnected)
         {
             try
@@ -357,20 +344,13 @@ public sealed class CfSyncRootManager : IDisposable
             }
             catch
             {
-                // Swallow exceptions during dispose
+                // Swallow exceptions during dispose.
             }
 
             _isConnected = false;
         }
 
-        if (_contextHandle.IsAllocated)
-        {
-            _contextHandle.Free();
-        }
-
-        ReleasePinnedDelegates();
-        _callbackHandler = null;
-        _callbackContext = null;
+        FreeConnectResources();
         _disposed = true;
     }
 
@@ -379,63 +359,63 @@ public sealed class CfSyncRootManager : IDisposable
     // =========================================================================
 
     /// <summary>
-    /// Builds the native callback registration table.
-    /// Each callback type is mapped to a static dispatcher method that receives
-    /// the context pointer and delegates to the managed <see cref="ICfCallbackHandler"/>.
+    /// Frees the GCHandle resources allocated during connect (context + callback table)
+    /// and clears the handler references.
     /// </summary>
-    /// <returns>An array of callback registrations for CfConnectSyncRoot.</returns>
-    private unsafe CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable()
+    private void FreeConnectResources()
     {
-        var entries = new List<CfNativeTypes.CF_CALLBACK_REGISTRATION>();
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_DATA, &OnFetchData);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_PLACEHOLDERS, &OnFetchPlaceholders);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.CANCEL_FETCH_DATA, &OnCancelFetchData);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE, &OnNotifyDehydrate);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE_COMPLETION, &OnNotifyDehydrateCompletion);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DELETE, &OnNotifyDelete);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_RENAME, &OnNotifyRename);
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_FILE_OPEN_COMPLETION, &OnNotifyFileOpenCompletion);
-
-        return entries.ToArray();
-    }
-
-    /// <summary>
-    /// Adds a callback entry to the registration table, converting the function pointer
-    /// to an <see cref="IntPtr"/> for the native registration structure.
-    /// </summary>
-    private static unsafe void AddCallback(
-        List<CfNativeTypes.CF_CALLBACK_REGISTRATION> entries,
-        CfNativeTypes.CF_CALLBACK_TYPE type,
-        delegate* unmanaged[Stdcall]<CfNativeTypes.CF_CALLBACK*, IntPtr, void> callback)
-    {
-        entries.Add(new CfNativeTypes.CF_CALLBACK_REGISTRATION
+        if (_contextHandle.IsAllocated)
         {
-            Type = type,
-            Callback = (IntPtr)callback,
-        });
-    }
-
-    /// <summary>
-    /// Releases all pinned delegate handles that were allocated for native callbacks.
-    /// Called on disconnect or dispose to allow the GC to reclaim the delegates.
-    /// </summary>
-    private void ReleasePinnedDelegates()
-    {
-        foreach (GCHandle handle in _pinnedDelegates)
-        {
-            if (handle.IsAllocated)
-            {
-                handle.Free();
-            }
+            _contextHandle.Free();
         }
 
-        _pinnedDelegates.Clear();
+        if (_callbackTableHandle.IsAllocated)
+        {
+            _callbackTableHandle.Free();
+        }
+
+        _callbackHandler = null;
+        _callbackContext = null;
     }
 
     /// <summary>
-    /// Extracts the <see cref="CallbackContext"/> from the native context pointer.
-    /// Returns null if the context is invalid or has been freed.
+    /// Builds the native callback registration table. Each callback type maps to a static
+    /// <c>[UnmanagedCallersOnly]</c> dispatcher. The table is terminated with a
+    /// <c>CF_CALLBACK_TYPE_NONE</c> row (CF_CALLBACK_REGISTRATION_END) as required by the API.
+    /// </summary>
+    /// <returns>An array of callback registrations for CfConnectSyncRoot.</returns>
+    private static unsafe CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable()
+    {
+        return
+        [
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.FETCH_DATA, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnFetchData),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.FETCH_PLACEHOLDERS, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnFetchPlaceholders),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.CANCEL_FETCH_DATA, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnCancelFetchData),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnNotifyDehydrate),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE_COMPLETION, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnNotifyDehydrateCompletion),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DELETE, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnNotifyDelete),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_RENAME, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnNotifyRename),
+            Entry(CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_FILE_OPEN_COMPLETION, (IntPtr)(delegate* unmanaged<CfNativeTypes.CF_CALLBACK_INFO*, IntPtr, void>)&OnNotifyFileOpenCompletion),
+
+            // CF_CALLBACK_REGISTRATION_END — terminator.
+            new CfNativeTypes.CF_CALLBACK_REGISTRATION
+            {
+                Type = CfNativeTypes.CF_CALLBACK_TYPE.NONE,
+                Callback = IntPtr.Zero,
+            },
+        ];
+    }
+
+    /// <summary>
+    /// Constructs a single callback registration row.
+    /// </summary>
+    private static CfNativeTypes.CF_CALLBACK_REGISTRATION Entry(
+        CfNativeTypes.CF_CALLBACK_TYPE type, IntPtr callback) =>
+        new() { Type = type, Callback = callback };
+
+    /// <summary>
+    /// Extracts the <see cref="CallbackContext"/> from the native context pointer carried
+    /// in <c>CF_CALLBACK_INFO.CallbackContext</c>. Returns null if invalid or freed.
     /// </summary>
     private static CallbackContext? GetContext(IntPtr contextPtr)
     {
@@ -449,49 +429,53 @@ public sealed class CfSyncRootManager : IDisposable
     }
 
     /// <summary>
-    /// Resolves a file path from the callback's FileId using the path resolver.
-    /// Returns a fallback string if the FileId is not in the map.
+    /// Resolves the local file path for a callback. Prefers the platform-supplied
+    /// <c>NormalizedPath</c> (present when the connection requested REQUIRE_FULL_FILE_PATH);
+    /// falls back to the FileId map.
     /// </summary>
-    private static string ResolvePath(CallbackContext context, long fileId)
+    private static unsafe string ResolvePath(CallbackContext context, CfNativeTypes.CF_CALLBACK_INFO* info)
     {
-        return context.PathResolver.ResolvePath(fileId) ?? $"[UnknownFile:{fileId}]";
+        string? normalized = HydrationDataProvider.ReadPcwstr(info->NormalizedPath);
+        if (!string.IsNullOrEmpty(normalized))
+        {
+            return normalized;
+        }
+
+        return context.PathResolver.ResolvePath(info->FileId) ?? $"[UnknownFile:{info->FileId}]";
     }
 
     // =========================================================================
     // Native callback dispatchers
+    // Signature: void(CF_CALLBACK_INFO* info, CF_CALLBACK_PARAMETERS* params)
+    // The parameter block is a C union; it is received as IntPtr and reinterpreted
+    // per callback type using the matching explicit-layout view.
     // =========================================================================
 
-    /// <summary>
-    /// Dispatches FETCH_DATA callbacks to the managed handler.
-    /// Called when an application opens a placeholder file and the platform needs data.
-    /// Extracts the file path from FileId, transfer key from the callback info,
-    /// and offset/length from the operation parameters.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnFetchData(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches FETCH_DATA callbacks — the critical hydration path.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnFetchData(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            var fetchParams = (CfNativeTypes.CF_OPERATION_PARAMETERS_FETCH_DATA*)
-                callbackInfo->OperationParameters;
+            var p = (CfNativeTypes.CF_CALLBACK_PARAMETERS_FETCH_DATA*)parameters;
+            string filePath = ResolvePath(context, info);
 
-            CfNativeTypes.CF_TRANSFER_KEY nativeKey = HydrationDataProvider.GetTransferKey(callbackInfo);
-            var transferKey = new TransferKey(nativeKey.Internal);
-
-            string filePath = ResolvePath(context, callbackInfo->FileId);
-
-            context.Handler.FetchDataAsync(
+            var request = new FetchDataRequest(
                 filePath,
-                fetchParams->Offset,
-                fetchParams->Length,
-                transferKey,
-                callbackInfo->VolumeGuidName,
-                callbackInfo->FileId,
-                CancellationToken.None
-            ).GetAwaiter().GetResult();
+                p->RequiredFileOffset,
+                p->RequiredLength,
+                p->OptionalFileOffset,
+                p->OptionalLength,
+                info->ConnectionKey,
+                info->TransferKey,
+                info->RequestKey,
+                (long)info->CorrelationVector);
+
+            context.Handler.FetchDataAsync(request, CancellationToken.None)
+                .GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -499,24 +483,18 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches FETCH_PLACEHOLDERS callbacks to the managed handler.
-    /// Called when the platform needs to enumerate and create placeholders for a directory.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnFetchPlaceholders(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches FETCH_PLACEHOLDERS callbacks — on-demand directory population.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnFetchPlaceholders(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string dirPath = ResolvePath(context, callbackInfo->FileId);
-
-            context.Handler.FetchPlaceholdersAsync(
-                dirPath,
-                CancellationToken.None
-            ).GetAwaiter().GetResult();
+            string dirPath = ResolvePath(context, info);
+            context.Handler.FetchPlaceholdersAsync(dirPath, CancellationToken.None)
+                .GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -524,24 +502,19 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches CANCEL_FETCH_DATA callbacks to the managed handler.
-    /// Called when a pending hydration operation is cancelled (e.g., user closes the app).
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnCancelFetchData(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches CANCEL_FETCH_DATA callbacks — a pending hydration was cancelled.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnCancelFetchData(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            CfNativeTypes.CF_TRANSFER_KEY nativeKey = HydrationDataProvider.GetTransferKey(callbackInfo);
-            var transferKey = new TransferKey(nativeKey.Internal);
-
-            string filePath = ResolvePath(context, callbackInfo->FileId);
-
-            context.Handler.CancelFetchDataAsync(filePath, transferKey).GetAwaiter().GetResult();
+            string filePath = ResolvePath(context, info);
+            var transferKey = new TransferKey(info->TransferKey);
+            context.Handler.CancelFetchDataAsync(filePath, transferKey)
+                .GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -549,19 +522,16 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches NOTIFY_DEHYDRATE callbacks to the managed handler.
-    /// Called when a file is about to be dehydrated (local cache released).
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnNotifyDehydrate(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches NOTIFY_DEHYDRATE callbacks — a file is about to be dehydrated.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnNotifyDehydrate(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string filePath = ResolvePath(context, callbackInfo->FileId);
+            string filePath = ResolvePath(context, info);
             context.Handler.NotifyDehydrateAsync(filePath).GetAwaiter().GetResult();
         }
         catch (Exception ex)
@@ -570,18 +540,16 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches NOTIFY_DEHYDRATE_COMPLETION callbacks to the managed handler.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnNotifyDehydrateCompletion(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches NOTIFY_DEHYDRATE_COMPLETION callbacks.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnNotifyDehydrateCompletion(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string filePath = ResolvePath(context, callbackInfo->FileId);
+            string filePath = ResolvePath(context, info);
             context.Handler.NotifyDehydrateCompletionAsync(filePath).GetAwaiter().GetResult();
         }
         catch (Exception ex)
@@ -590,23 +558,19 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches NOTIFY_DELETE callbacks to the managed handler.
-    /// Called when a file under the sync root is deleted.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnNotifyDelete(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches NOTIFY_DELETE callbacks — a file under the sync root was deleted.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnNotifyDelete(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string filePath = ResolvePath(context, callbackInfo->FileId);
+            string filePath = ResolvePath(context, info);
             context.Handler.NotifyDeleteAsync(filePath).GetAwaiter().GetResult();
 
-            // Remove the file from the path resolver
-            context.PathResolver.RemoveMapping(callbackInfo->FileId);
+            context.PathResolver.RemoveMapping(info->FileId);
         }
         catch (Exception ex)
         {
@@ -614,22 +578,23 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches NOTIFY_RENAME callbacks to the managed handler.
-    /// Called when a file under the sync root is renamed or moved.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnNotifyRename(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches NOTIFY_RENAME callbacks — a file was renamed or moved.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnNotifyRename(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string sourcePath = ResolvePath(context, callbackInfo->FileId);
-            // Note: destination path requires reading OperationParameters for RENAME
-            // which contains the new path. For now, pass empty string as destination.
-            context.Handler.NotifyRenameAsync(sourcePath, string.Empty).GetAwaiter().GetResult();
+            string sourcePath = ResolvePath(context, info);
+
+            // The new path is in the RENAME parameter block's TargetPath (PCWSTR).
+            var p = (CfNativeTypes.CF_CALLBACK_PARAMETERS_RENAME*)parameters;
+            string? targetPath = HydrationDataProvider.ReadPcwstr(p->TargetPath);
+
+            context.Handler.NotifyRenameAsync(sourcePath, targetPath ?? string.Empty)
+                .GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -637,18 +602,16 @@ public sealed class CfSyncRootManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Dispatches NOTIFY_FILE_OPEN_COMPLETION callbacks to the managed handler.
-    /// </summary>
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe void OnNotifyFileOpenCompletion(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
+    /// <summary>Dispatches NOTIFY_FILE_OPEN_COMPLETION callbacks.</summary>
+    [UnmanagedCallersOnly]
+    private static unsafe void OnNotifyFileOpenCompletion(CfNativeTypes.CF_CALLBACK_INFO* info, IntPtr parameters)
     {
         try
         {
-            CallbackContext? context = GetContext(contextPtr);
+            CallbackContext? context = GetContext(info->CallbackContext);
             if (context is null) return;
 
-            string filePath = ResolvePath(context, callbackInfo->FileId);
+            string filePath = ResolvePath(context, info);
             context.Handler.NotifyFileOpenCompletionAsync(filePath).GetAwaiter().GetResult();
         }
         catch (Exception ex)
