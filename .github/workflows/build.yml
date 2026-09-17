@@ -225,6 +225,15 @@ jobs:
         if: github.event.inputs.sign_package != 'false'
         shell: pwsh
         run: |
+          # Find signtool.exe
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) {
+            Write-Error "signtool.exe not found"
+            exit 1
+          }
+
+          Write-Host "Using: $($signtool.FullName)"
+
           $msixFiles = Get-ChildItem -Path "publish/" -Filter "*.msix"
           if ($msixFiles.Count -eq 0) {
             Write-Warning "No MSIX files found in publish/ directory"
@@ -232,7 +241,7 @@ jobs:
           } else {
             foreach ($msix in $msixFiles) {
               Write-Host "Signing: $($msix.FullName)"
-              & signtool sign /fd SHA256 /a /f "ci-signing-cert.pfx" /p "NasSyncCI2026" $msix.FullName
+              & $signtool.FullName sign /fd SHA256 /a /f "ci-signing-cert.pfx" /p "NasSyncCI2026" $msix.FullName
               Write-Host "Signed successfully."
             }
           }
