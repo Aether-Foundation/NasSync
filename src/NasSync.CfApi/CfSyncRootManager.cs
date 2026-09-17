@@ -141,8 +141,14 @@ public sealed class CfSyncRootManager : IDisposable
 
         if (hr != 0)
         {
+            string details = $"Path='{registrationInfo.SyncRootPath}', " +
+                $"DisplayName='{registrationInfo.DisplayName}', " +
+                $"IconResource='{registrationInfo.IconResource}', " +
+                $"ProviderId='{registrationInfo.ProviderId}', " +
+                $"AccountId='{registrationInfo.AccountId}'";
+
             throw new CfApiException("CfRegisterSyncRoot", hr,
-                $"Failed to register sync root at '{registrationInfo.SyncRootPath}'.");
+                $"Failed to register sync root. {details}");
         }
 
         // Step 4: Store registration state

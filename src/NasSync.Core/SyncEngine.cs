@@ -87,8 +87,10 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
                 ProviderId = _config.ProviderId,
                 AccountId = _config.AccountId,
                 SyncRootPath = _config.SyncRootPath,
-                DisplayName = _config.DisplayName,
-                IconResource = _config.IconResource,
+                DisplayName = string.IsNullOrEmpty(_config.DisplayName) ? "NAS Cloud Sync" : _config.DisplayName,
+                IconResource = string.IsNullOrEmpty(_config.IconResource)
+                    ? @"%SystemRoot%\system32\imageres.dll,-1043"
+                    : _config.IconResource,
                 HydrationPolicy = HydrationPolicy.Progressive,
                 HydrationPolicyModifier = HydrationPolicyModifier.AutoDehydrationAllowed,
                 PopulationPolicy = PopulationPolicy.Full,
