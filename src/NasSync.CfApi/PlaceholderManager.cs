@@ -105,58 +105,88 @@ public sealed class PlaceholderManager
             ? CfNativeTypes.CF_PLACEHOLDER_CREATE_FLAGS.MARK_IN_SYNC
             : CfNativeTypes.CF_PLACEHOLDER_CREATE_FLAGS.NONE;
 
-        for (int i = 0; i < entries.Count; i++)
+        // FileIdentity is a MANDATORY field for file placeholders (cfapi.h docs): the API
+        // rejects the whole batch with ERROR_CLOUD_FILE_INVALID_REQUEST if a file entry has
+        // a null FileIdentity. We store the relative path as a null-terminated UTF-16 blob —
+        // the platform persists it and echoes it back in every callback for that placeholder,
+        // letting the engine identify the cloud file without a FileId lookup. These buffers
+        // are allocated in unmanaged memory and must be freed after the native call returns.
+        var identityPtrs = new IntPtr[entries.Count];
+
+        try
         {
-            PlaceholderEntry entry = entries[i];
-            nativeEntries[i] = new CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO
+            for (int i = 0; i < entries.Count; i++)
             {
-                RelativeFileName = entry.RelativePath,
-                FsMetadata = new CfNativeTypes.CF_FS_METADATA
+                PlaceholderEntry entry = entries[i];
+
+                // Allocate the FileIdentity blob (null-terminated UTF-16 relative path).
+                IntPtr identityPtr = Marshal.StringToCoTaskMemUni(entry.RelativePath);
+                identityPtrs[i] = identityPtr;
+                uint identityLength = (uint)((entry.RelativePath.Length + 1) * sizeof(char));
+
+                nativeEntries[i] = new CfNativeTypes.CF_PLACEHOLDER_CREATE_INFO
                 {
-                    FileSize = entry.IsDirectory ? 0 : entry.FileSize,
-                    BasicInfo = new CfNativeTypes.FILE_BASIC_INFO
+                    RelativeFileName = entry.RelativePath,
+                    FsMetadata = new CfNativeTypes.CF_FS_METADATA
                     {
-                        CreationTime = entry.CreatedUtc.ToFileTime(),
-                        LastWriteTime = entry.LastModifiedUtc.ToFileTime(),
-                        LastAccessTime = entry.LastModifiedUtc.ToFileTime(),
-                        ChangeTime = entry.LastModifiedUtc.ToFileTime(),
-                        FileAttributes = entry.IsDirectory
-                            ? FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY
-                            : FILE_ATTRIBUTE_NORMAL,
+                        FileSize = entry.IsDirectory ? 0 : entry.FileSize,
+                        BasicInfo = new CfNativeTypes.FILE_BASIC_INFO
+                        {
+                            CreationTime = entry.CreatedUtc.ToFileTime(),
+                            LastWriteTime = entry.LastModifiedUtc.ToFileTime(),
+                            LastAccessTime = entry.LastModifiedUtc.ToFileTime(),
+                            ChangeTime = entry.LastModifiedUtc.ToFileTime(),
+                            FileAttributes = entry.IsDirectory
+                                ? FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY
+                                : FILE_ATTRIBUTE_NORMAL,
+                        },
                     },
-                },
-                FileIdentity = IntPtr.Zero,
-                FileIdentityLength = 0,
-                Flags = perEntryFlags,
-            };
-        }
-
-        int hr = CfNativeMethods.CfCreatePlaceholders(
-            _syncRootPath,
-            nativeEntries,
-            (uint)nativeEntries.Length,
-            CfNativeTypes.CF_CREATE_FLAGS.STOP_ON_ERROR,
-            out uint entriesProcessed);
-
-        if (hr != 0)
-        {
-            // Surface the first per-entry failure to aid diagnostics.
-            int firstEntryError = 0;
-            string? firstErrorPath = null;
-            for (int i = 0; i < nativeEntries.Length; i++)
-            {
-                if (nativeEntries[i].Result != 0)
-                {
-                    firstEntryError = nativeEntries[i].Result;
-                    firstErrorPath = nativeEntries[i].RelativeFileName;
-                    break;
-                }
+                    FileIdentity = identityPtr,
+                    FileIdentityLength = identityLength,
+                    Flags = perEntryFlags,
+                };
             }
 
-            throw new CfApiException("CfCreatePlaceholders", hr,
-                $"Failed to create {entries.Count} placeholder(s) under '{_syncRootPath}' " +
-                $"(processed {entriesProcessed}). First entry error: 0x{firstEntryError:X8} " +
-                $"at '{firstErrorPath}'.");
+            int hr = CfNativeMethods.CfCreatePlaceholders(
+                _syncRootPath,
+                nativeEntries,
+                (uint)nativeEntries.Length,
+                CfNativeTypes.CF_CREATE_FLAGS.STOP_ON_ERROR,
+                out uint entriesProcessed);
+
+            if (hr != 0)
+            {
+                // Surface the first per-entry failure to aid diagnostics. When the API
+                // rejects the batch up front (entriesProcessed == 0, no per-entry Result),
+                // it is a whole-array validation failure rather than a single bad entry.
+                int firstEntryError = 0;
+                string? firstErrorPath = null;
+                for (int i = 0; i < nativeEntries.Length; i++)
+                {
+                    if (nativeEntries[i].Result != 0)
+                    {
+                        firstEntryError = nativeEntries[i].Result;
+                        firstErrorPath = nativeEntries[i].RelativeFileName;
+                        break;
+                    }
+                }
+
+                throw new CfApiException("CfCreatePlaceholders", hr,
+                    $"Failed to create {entries.Count} placeholder(s) under '{_syncRootPath}' " +
+                    $"(processed {entriesProcessed}). First entry error: 0x{firstEntryError:X8} " +
+                    $"at '{firstErrorPath}'.");
+            }
+        }
+        finally
+        {
+            // Free every FileIdentity blob we allocated, regardless of success or failure.
+            foreach (IntPtr p in identityPtrs)
+            {
+                if (p != IntPtr.Zero)
+                {
+                    Marshal.FreeCoTaskMem(p);
+                }
+            }
         }
 
         return Task.CompletedTask;
