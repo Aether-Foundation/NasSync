@@ -1,6 +1,5 @@
 using NasSync.Adapters;
 using NasSync.CfApi;
-using NasSync.CfApi.Interop;
 
 namespace NasSync.Core;
 
@@ -221,24 +220,21 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
 
     /// <summary>
     /// Handles FETCH_DATA callbacks — downloads file data from the adapter and
-    /// delivers it to the platform via <see cref="HydrationDataProvider.ProvideDataAsync"/>.
+    /// delivers it to the platform via <see cref="HydrationDataProvider.ProvideData"/>.
     /// This is the critical hydration path.
     /// </summary>
-    public async Task FetchDataAsync(
-        string filePath,
-        long offset,
-        long length,
-        TransferKey transferKey,
-        Guid volumeGuidName,
-        long fileId,
-        CancellationToken cancellationToken)
+    public async Task FetchDataAsync(FetchDataRequest request, CancellationToken cancellationToken)
     {
         if (_state == SyncState.Paused)
         {
             return;
         }
 
-        // Compute the remote path from the local file path
+        string filePath = request.FilePath;
+        long offset = request.RequiredOffset;
+        long length = request.RequiredLength;
+
+        // Compute the remote path from the local file path.
         string relativePath = Path.GetRelativePath(_config.SyncRootPath, filePath);
         string remotePath = "/" + relativePath.Replace('\\', '/');
 
@@ -246,27 +242,25 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
             SyncOperationType.Download, SyncOperationStatus.InProgress,
             filePath, remotePath, 0, length));
 
+        var hydrationProvider = new HydrationDataProvider();
+
         try
         {
-            // Report progress to the Shell
-            _placeholderManager.ReportProgress(length, 0);
+            // Report progress to the Shell.
+            hydrationProvider.ReportProgress(request, length, 0);
 
-            // Download from adapter
+            // Download the requested range from the adapter.
             using var ms = new MemoryStream();
             await _adapter.DownloadFileAsync(remotePath, ms, offset, length, null, cancellationToken);
             byte[] data = ms.ToArray();
 
-            // Deliver to platform via CfExecute
-            var nativeKey = new CfNativeTypes.CF_TRANSFER_KEY { Internal = transferKey.Value };
+            // Deliver to platform via CfExecute (TRANSFER_DATA).
+            hydrationProvider.ProvideData(request, data, offset);
 
-            // Access HydrationDataProvider through the sync root manager's callback context
-            var hydrationProvider = new HydrationDataProvider();
-            await hydrationProvider.ProvideDataAsync(volumeGuidName, fileId, nativeKey, data, offset);
+            // Report completion.
+            hydrationProvider.ReportProgress(request, length, length);
 
-            // Report completion
-            _placeholderManager.ReportProgress(length, length);
-
-            // Mark as recently synced to prevent FSW echo
+            // Mark as recently synced to prevent FSW echo.
             _changeWatcher?.MarkRecentlySynced(filePath);
 
             SyncOperation?.Invoke(this, new SyncOperationEventArgs(
@@ -277,16 +271,15 @@ public sealed class SyncEngine : ISyncEngine, ICfCallbackHandler
         {
             System.Diagnostics.Debug.WriteLine($"[SyncEngine] FetchData error for {filePath}: {ex.Message}");
 
-            // Report error to platform
+            // Report the failure to the platform so the application's I/O completes
+            // with an error instead of hanging.
             try
             {
-                var nativeKey = new CfNativeTypes.CF_TRANSFER_KEY { Internal = transferKey.Value };
-                var hydrationProvider = new HydrationDataProvider();
-                hydrationProvider.ReportError(volumeGuidName, fileId, nativeKey, 0x00000002); // ERROR_FILE_NOT_FOUND
+                hydrationProvider.ReportError(request);
             }
             catch
             {
-                // Best effort
+                // Best effort.
             }
 
             SyncOperation?.Invoke(this, new SyncOperationEventArgs(

@@ -238,12 +238,12 @@ Console.ReadKey();
 // ==========================================================================
 sealed class TestCallbackHandler : ICfCallbackHandler
 {
-    public Task FetchDataAsync(string filePath, long offset, long length, TransferKey transferKey, Guid volumeGuidName, long fileId, CancellationToken ct)
+    public Task FetchDataAsync(FetchDataRequest request, CancellationToken ct)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"  [CALLBACK] FetchData: {filePath} offset={offset} length={length} transferKey={transferKey.Value} fileId={fileId}");
+        Console.WriteLine($"  [CALLBACK] FetchData: {request.FilePath} offset={request.RequiredOffset} length={request.RequiredLength} transferKey={request.TransferKey}");
         Console.ResetColor();
-        // In a real implementation, we'd download from NAS and call HydrationDataProvider.ProvideDataAsync
+        // In a real implementation, we'd download from NAS and call HydrationDataProvider.ProvideData.
         return Task.CompletedTask;
     }
 
