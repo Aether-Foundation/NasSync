@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>NasSync.Adapters.WebDav</RootNamespace>
+    <AssemblyName>NasSync.Adapters.WebDav</AssemblyName>
+    <Description>WebDAV protocol adapter — provides file operations over HTTP/WebDAV protocol.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NasSync.Adapters\NasSync.Adapters.csproj" />
+  </ItemGroup>
+
+</Project>

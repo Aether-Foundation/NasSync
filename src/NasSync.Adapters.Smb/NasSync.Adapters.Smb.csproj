@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>NasSync.Adapters.Smb</RootNamespace>
+    <AssemblyName>NasSync.Adapters.Smb</AssemblyName>
+    <Description>SMB/CIFS protocol adapter — provides file operations over Windows network shares.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NasSync.Adapters\NasSync.Adapters.csproj" />
+  </ItemGroup>
+
+</Project>
