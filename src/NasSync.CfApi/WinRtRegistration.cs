@@ -123,15 +123,11 @@ public static class WinRtRegistration
 
     /// <summary>
     /// Builds a sync root ID string from provider and account identifiers.
-    /// Format: <c>[ProviderId]![UserSid]![AccountId]</c>
+    /// Delegates to <see cref="SyncRootIdHelper"/> for consistent ID construction.
     /// </summary>
     private static string BuildSyncRootId(string providerId, string accountId)
     {
-        // Get the current user's SID for the sync root ID
-        string userSid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value
-            ?? "S-1-5-0"; // Fallback to well-known SID if unavailable
-
-        return $"{providerId}!{userSid}!{accountId}";
+        return SyncRootIdHelper.Build(providerId, accountId);
     }
 
     /// <summary>

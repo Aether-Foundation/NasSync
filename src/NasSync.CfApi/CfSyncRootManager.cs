@@ -19,6 +19,8 @@ namespace NasSync.CfApi;
 /// <para>
 /// After registration, <c>ConnectAsync</c> begins receiving callbacks from the platform
 /// when applications access placeholder files (hydration) or modify files under the sync root.
+/// Callback state is passed via a pinned <see cref="CallbackContext"/> object through
+/// <c>GCHandle</c> to the native context pointer.
 /// </para>
 /// </summary>
 public sealed class CfSyncRootManager : IDisposable
@@ -40,7 +42,25 @@ public sealed class CfSyncRootManager : IDisposable
     /// Pinned delegate references for native callbacks.
     /// These must be kept alive for the duration of the connection.
     /// </summary>
-    private readonly List<GCHandle> _pinnedDelegates = new();
+    private readonly List<GCHandle> _pinnedDelegates = [];
+
+    /// <summary>
+    /// Bidirectional file ID to path resolver. Populated after placeholder creation
+    /// and used by callback dispatchers to resolve file paths from FileId values.
+    /// </summary>
+    private readonly PathResolver _pathResolver = new();
+
+    /// <summary>
+    /// The callback context passed to native callbacks via GCHandle.
+    /// Contains references to the handler, path resolver, and hydration provider.
+    /// </summary>
+    private CallbackContext? _callbackContext;
+
+    /// <summary>
+    /// GCHandle pinning the <see cref="_callbackContext"/> to prevent GC collection
+    /// while the sync root is connected.
+    /// </summary>
+    private GCHandle _contextHandle;
 
     /// <summary>
     /// Gets whether a sync root is currently registered with the OS.
@@ -64,6 +84,12 @@ public sealed class CfSyncRootManager : IDisposable
     public string? SyncRootId => _syncRootId;
 
     /// <summary>
+    /// Gets the path resolver that maps NTFS file IDs to file system paths.
+    /// Populated after placeholder creation via <see cref="PlaceholderManager.GetFileId"/>.
+    /// </summary>
+    public PathResolver PathResolver => _pathResolver;
+
+    /// <summary>
     /// Registers a new sync root with the Windows Cloud Filter platform.
     ///
     /// <para>This method:</para>
@@ -83,6 +109,7 @@ public sealed class CfSyncRootManager : IDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(registrationInfo);
 
         if (_isRegistered)
         {
@@ -120,7 +147,7 @@ public sealed class CfSyncRootManager : IDisposable
 
         // Step 4: Store registration state
         _syncRootPath = registrationInfo.SyncRootPath;
-        _syncRootId = $"{registrationInfo.ProviderId}!{Environment.UserDomainName}!{registrationInfo.AccountId}";
+        _syncRootId = SyncRootIdHelper.Build(registrationInfo.ProviderId, registrationInfo.AccountId);
         _isRegistered = true;
 
         return Task.CompletedTask;
@@ -158,6 +185,7 @@ public sealed class CfSyncRootManager : IDisposable
         }
 
         // Clear registration state
+        _pathResolver.Clear();
         _syncRootPath = null;
         _syncRootId = null;
         _isRegistered = false;
@@ -200,23 +228,34 @@ public sealed class CfSyncRootManager : IDisposable
 
         _callbackHandler = callbacks ?? throw new ArgumentNullException(nameof(callbacks));
 
-        // Build the callback registration table.
-        // Each entry maps a callback type to a native function pointer.
-        var callbackEntries = BuildCallbackTable(callbacks);
+        // Create the callback context and pin it via GCHandle
+        _callbackContext = new CallbackContext
+        {
+            Handler = callbacks,
+            PathResolver = _pathResolver,
+            HydrationProvider = new HydrationDataProvider(),
+            SyncRootPath = _syncRootPath,
+        };
+        _contextHandle = GCHandle.Alloc(_callbackContext);
 
-        // Connect with flags to receive process info and placeholder info in callbacks
+        // Build the callback registration table
+        var callbackEntries = BuildCallbackTable();
+
+        // Connect with flags to receive process info in callbacks
         int hr = CfNativeMethods.CfConnectSyncRoot(
             _syncRootPath,
             callbackEntries,
             (uint)callbackEntries.Length,
             CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_PROCESS_INFO |
                 CfNativeTypes.CF_CONNECT_FLAGS.REQUIRE_FULL_IMAGE_PATH,
-            IntPtr.Zero, // context — we use the stored _callbackHandler field instead
+            GCHandle.ToIntPtr(_contextHandle),
             out _connectionKey);
 
         if (hr != 0)
         {
-            // Clean up pinned delegates on failure
+            // Clean up on failure
+            _contextHandle.Free();
+            _callbackContext = null;
             ReleasePinnedDelegates();
             throw new CfApiException("CfConnectSyncRoot", hr,
                 "Failed to connect sync root for callbacks.");
@@ -252,6 +291,14 @@ public sealed class CfSyncRootManager : IDisposable
 
         _isConnected = false;
         _callbackHandler = null;
+
+        // Free the context handle
+        if (_contextHandle.IsAllocated)
+        {
+            _contextHandle.Free();
+        }
+
+        _callbackContext = null;
         ReleasePinnedDelegates();
 
         return Task.CompletedTask;
@@ -270,7 +317,7 @@ public sealed class CfSyncRootManager : IDisposable
         {
             try
             {
-                CfNativeMethods.CfDisconnectSyncRoot(_connectionKey);
+                _ = CfNativeMethods.CfDisconnectSyncRoot(_connectionKey);
             }
             catch
             {
@@ -280,8 +327,14 @@ public sealed class CfSyncRootManager : IDisposable
             _isConnected = false;
         }
 
+        if (_contextHandle.IsAllocated)
+        {
+            _contextHandle.Free();
+        }
+
         ReleasePinnedDelegates();
         _callbackHandler = null;
+        _callbackContext = null;
         _disposed = true;
     }
 
@@ -290,62 +343,40 @@ public sealed class CfSyncRootManager : IDisposable
     // =========================================================================
 
     /// <summary>
-    /// Builds the native callback registration table from the managed callback handler.
-    /// Each callback type is mapped to a static dispatcher method that delegates to
-    /// the managed <see cref="ICfCallbackHandler"/> implementation.
+    /// Builds the native callback registration table.
+    /// Each callback type is mapped to a static dispatcher method that receives
+    /// the context pointer and delegates to the managed <see cref="ICfCallbackHandler"/>.
     /// </summary>
-    /// <param name="handler">The managed callback handler.</param>
     /// <returns>An array of callback registrations for CfConnectSyncRoot.</returns>
-    private unsafe CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable(ICfCallbackHandler handler)
+    private unsafe CfNativeTypes.CF_CALLBACK_REGISTRATION[] BuildCallbackTable()
     {
-        // Create native delegates for each callback type we want to handle.
-        // These delegates are pinned via GCHandle to prevent GC collection.
         var entries = new List<CfNativeTypes.CF_CALLBACK_REGISTRATION>();
 
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_DATA,
-            (info, ctx) => OnFetchData(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_PLACEHOLDERS,
-            (info, ctx) => OnFetchPlaceholders(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.CANCEL_FETCH_DATA,
-            (info, ctx) => OnCancelFetchData(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE,
-            (info, ctx) => OnNotifyDehydrate(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE_COMPLETION,
-            (info, ctx) => OnNotifyDehydrateCompletion(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DELETE,
-            (info, ctx) => OnNotifyDelete(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_RENAME,
-            (info, ctx) => OnNotifyRename(handler, info));
-
-        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_FILE_OPEN_COMPLETION,
-            (info, ctx) => OnNotifyFileOpenCompletion(handler, info));
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_DATA, &OnFetchData);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.FETCH_PLACEHOLDERS, &OnFetchPlaceholders);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.CANCEL_FETCH_DATA, &OnCancelFetchData);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE, &OnNotifyDehydrate);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DEHYDRATE_COMPLETION, &OnNotifyDehydrateCompletion);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_DELETE, &OnNotifyDelete);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_RENAME, &OnNotifyRename);
+        AddCallback(entries, CfNativeTypes.CF_CALLBACK_TYPE.NOTIFY_FILE_OPEN_COMPLETION, &OnNotifyFileOpenCompletion);
 
         return entries.ToArray();
     }
 
     /// <summary>
-    /// Adds a callback entry to the registration table, pinning the delegate
-    /// to prevent garbage collection while the sync root is connected.
+    /// Adds a callback entry to the registration table, converting the function pointer
+    /// to an <see cref="IntPtr"/> for the native registration structure.
     /// </summary>
-    private unsafe void AddCallback(
+    private static unsafe void AddCallback(
         List<CfNativeTypes.CF_CALLBACK_REGISTRATION> entries,
         CfNativeTypes.CF_CALLBACK_TYPE type,
-        CfNativeTypes.CF_CALLBACK_DELEGATE callback)
+        delegate* unmanaged[Stdcall]<CfNativeTypes.CF_CALLBACK*, IntPtr, void> callback)
     {
-        // Pin the delegate so the GC doesn't collect it while native code holds a reference
-        GCHandle handle = GCHandle.Alloc(callback);
-        _pinnedDelegates.Add(handle);
-
         entries.Add(new CfNativeTypes.CF_CALLBACK_REGISTRATION
         {
             Type = type,
-            Callback = Marshal.GetFunctionPointerForDelegate(callback),
+            Callback = (IntPtr)callback,
         });
     }
 
@@ -366,6 +397,30 @@ public sealed class CfSyncRootManager : IDisposable
         _pinnedDelegates.Clear();
     }
 
+    /// <summary>
+    /// Extracts the <see cref="CallbackContext"/> from the native context pointer.
+    /// Returns null if the context is invalid or has been freed.
+    /// </summary>
+    private static CallbackContext? GetContext(IntPtr contextPtr)
+    {
+        if (contextPtr == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        GCHandle handle = GCHandle.FromIntPtr(contextPtr);
+        return handle.Target as CallbackContext;
+    }
+
+    /// <summary>
+    /// Resolves a file path from the callback's FileId using the path resolver.
+    /// Returns a fallback string if the FileId is not in the map.
+    /// </summary>
+    private static string ResolvePath(CallbackContext context, long fileId)
+    {
+        return context.PathResolver.ResolvePath(fileId) ?? $"[UnknownFile:{fileId}]";
+    }
+
     // =========================================================================
     // Native callback dispatchers
     // =========================================================================
@@ -373,26 +428,38 @@ public sealed class CfSyncRootManager : IDisposable
     /// <summary>
     /// Dispatches FETCH_DATA callbacks to the managed handler.
     /// Called when an application opens a placeholder file and the platform needs data.
+    /// Extracts the file path from FileId, transfer key from the callback info,
+    /// and offset/length from the operation parameters.
     /// </summary>
-    private static unsafe void OnFetchData(ICfCallbackHandler handler, CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnFetchData(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            // Extract fetch parameters from the callback info
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
             var fetchParams = (CfNativeTypes.CF_OPERATION_PARAMETERS_FETCH_DATA*)
                 callbackInfo->OperationParameters;
 
-            handler.FetchDataAsync(
-                string.Empty, // file path — resolved from context in production
+            CfNativeTypes.CF_TRANSFER_KEY nativeKey = HydrationDataProvider.GetTransferKey(callbackInfo);
+            var transferKey = new TransferKey(nativeKey.Internal);
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+
+            context.Handler.FetchDataAsync(
+                filePath,
                 fetchParams->Offset,
                 fetchParams->Length,
-                Guid.Empty, // transfer key — resolved via CfGetTransferKey
+                transferKey,
+                callbackInfo->VolumeGuidName,
+                callbackInfo->FileId,
                 CancellationToken.None
             ).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error — do not propagate exceptions to native code
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnFetchData error: {ex.Message}");
         }
     }
 
@@ -400,20 +467,24 @@ public sealed class CfSyncRootManager : IDisposable
     /// Dispatches FETCH_PLACEHOLDERS callbacks to the managed handler.
     /// Called when the platform needs to enumerate and create placeholders for a directory.
     /// </summary>
-    private static unsafe void OnFetchPlaceholders(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnFetchPlaceholders(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.FetchPlaceholdersAsync(
-                string.Empty, // directory path — resolved from context in production
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string dirPath = ResolvePath(context, callbackInfo->FileId);
+
+            context.Handler.FetchPlaceholdersAsync(
+                dirPath,
                 CancellationToken.None
             ).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error — do not propagate exceptions to native code
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnFetchPlaceholders error: {ex.Message}");
         }
     }
 
@@ -421,17 +492,24 @@ public sealed class CfSyncRootManager : IDisposable
     /// Dispatches CANCEL_FETCH_DATA callbacks to the managed handler.
     /// Called when a pending hydration operation is cancelled (e.g., user closes the app).
     /// </summary>
-    private static unsafe void OnCancelFetchData(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnCancelFetchData(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.CancelFetchDataAsync(string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            CfNativeTypes.CF_TRANSFER_KEY nativeKey = HydrationDataProvider.GetTransferKey(callbackInfo);
+            var transferKey = new TransferKey(nativeKey.Internal);
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+
+            context.Handler.CancelFetchDataAsync(filePath, transferKey).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnCancelFetchData error: {ex.Message}");
         }
     }
 
@@ -439,34 +517,40 @@ public sealed class CfSyncRootManager : IDisposable
     /// Dispatches NOTIFY_DEHYDRATE callbacks to the managed handler.
     /// Called when a file is about to be dehydrated (local cache released).
     /// </summary>
-    private static unsafe void OnNotifyDehydrate(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnNotifyDehydrate(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.NotifyDehydrateAsync(string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+            context.Handler.NotifyDehydrateAsync(filePath).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnNotifyDehydrate error: {ex.Message}");
         }
     }
 
     /// <summary>
     /// Dispatches NOTIFY_DEHYDRATE_COMPLETION callbacks to the managed handler.
     /// </summary>
-    private static unsafe void OnNotifyDehydrateCompletion(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnNotifyDehydrateCompletion(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.NotifyDehydrateCompletionAsync(string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+            context.Handler.NotifyDehydrateCompletionAsync(filePath).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnNotifyDehydrateCompletion error: {ex.Message}");
         }
     }
 
@@ -474,17 +558,23 @@ public sealed class CfSyncRootManager : IDisposable
     /// Dispatches NOTIFY_DELETE callbacks to the managed handler.
     /// Called when a file under the sync root is deleted.
     /// </summary>
-    private static unsafe void OnNotifyDelete(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnNotifyDelete(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.NotifyDeleteAsync(string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+            context.Handler.NotifyDeleteAsync(filePath).GetAwaiter().GetResult();
+
+            // Remove the file from the path resolver
+            context.PathResolver.RemoveMapping(callbackInfo->FileId);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnNotifyDelete error: {ex.Message}");
         }
     }
 
@@ -492,35 +582,42 @@ public sealed class CfSyncRootManager : IDisposable
     /// Dispatches NOTIFY_RENAME callbacks to the managed handler.
     /// Called when a file under the sync root is renamed or moved.
     /// </summary>
-    private static unsafe void OnNotifyRename(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnNotifyRename(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            // TODO: Extract source and destination paths from callback info
-            handler.NotifyRenameAsync(string.Empty, string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string sourcePath = ResolvePath(context, callbackInfo->FileId);
+            // Note: destination path requires reading OperationParameters for RENAME
+            // which contains the new path. For now, pass empty string as destination.
+            context.Handler.NotifyRenameAsync(sourcePath, string.Empty).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnNotifyRename error: {ex.Message}");
         }
     }
 
     /// <summary>
     /// Dispatches NOTIFY_FILE_OPEN_COMPLETION callbacks to the managed handler.
     /// </summary>
-    private static unsafe void OnNotifyFileOpenCompletion(
-        ICfCallbackHandler handler,
-        CfNativeTypes.CF_CALLBACK* callbackInfo)
+    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
+    private static unsafe void OnNotifyFileOpenCompletion(CfNativeTypes.CF_CALLBACK* callbackInfo, IntPtr contextPtr)
     {
         try
         {
-            handler.NotifyFileOpenCompletionAsync(string.Empty).GetAwaiter().GetResult();
+            CallbackContext? context = GetContext(contextPtr);
+            if (context is null) return;
+
+            string filePath = ResolvePath(context, callbackInfo->FileId);
+            context.Handler.NotifyFileOpenCompletionAsync(filePath).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log error
+            System.Diagnostics.Debug.WriteLine($"[CfAPI] OnNotifyFileOpenCompletion error: {ex.Message}");
         }
     }
 }

@@ -18,6 +18,27 @@ public sealed class PlaceholderManager
 {
     private readonly string _syncRootPath;
 
+    /// <summary>Win32 constant: GENERIC_READ access.</summary>
+    private const uint GENERIC_READ = 0x80000000;
+
+    /// <summary>Win32 constant: Share read + write + delete.</summary>
+    private const uint FILE_SHARE_ALL = 0x07;
+
+    /// <summary>Win32 constant: Open existing file (do not create).</summary>
+    private const uint OPEN_EXISTING = 3;
+
+    /// <summary>Win32 constant: Required to open directory handles.</summary>
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+
+    /// <summary>Win32 constant: Normal file attribute.</summary>
+    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+
+    /// <summary>Win32 constant: Directory file attribute.</summary>
+    private const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
+
+    /// <summary>Win32 constant: Read-only file attribute.</summary>
+    private const uint FILE_ATTRIBUTE_READONLY = 0x01;
+
     /// <summary>
     /// Creates a new PlaceholderManager for the specified sync root.
     /// </summary>
@@ -166,12 +187,52 @@ public sealed class PlaceholderManager
     }
 
     // =========================================================================
-    // Win32 constants
+    // FileId Resolution
     // =========================================================================
 
-    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
-    private const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
-    private const uint FILE_ATTRIBUTE_READONLY = 0x01;
+    /// <summary>
+    /// Retrieves the NTFS file index (FileId) for a given file or directory path.
+    /// This FileId matches the <c>FileId</c> field in CfAPI callback structures,
+    /// enabling path resolution when callbacks fire.
+    ///
+    /// <para>
+    /// Uses <c>CreateFileW</c> with <c>FILE_FLAG_BACKUP_SEMANTICS</c> to open directories,
+    /// then <c>GetFileInformationByHandle</c> to extract the file index.
+    /// </para>
+    /// </summary>
+    /// <param name="fullPath">The full path to the file or directory.</param>
+    /// <returns>The 64-bit NTFS file index.</returns>
+    /// <exception cref="System.ComponentModel.Win32Exception">
+    /// Thrown if the file cannot be opened or its information cannot be retrieved.
+    /// </exception>
+    public static long GetFileId(string fullPath)
+    {
+        using var handle = CfNativeMethods.CreateFileW(
+            fullPath,
+            GENERIC_READ,
+            FILE_SHARE_ALL,
+            IntPtr.Zero,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, // Required for opening directories
+            IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(),
+                $"Failed to open '{fullPath}' for FileId query.");
+        }
+
+        if (!CfNativeMethods.GetFileInformationByHandle(handle, out CfNativeTypes.BY_HANDLE_FILE_INFORMATION info))
+        {
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(),
+                $"Failed to get file information for '{fullPath}'.");
+        }
+
+        // Combine high and low 32-bit parts into a 64-bit file index
+        return ((long)info.FileIndexHigh << 32) | info.FileIndexLow;
+    }
 }
 
 /// <summary>

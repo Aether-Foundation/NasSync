@@ -466,4 +466,60 @@ internal static class CfNativeTypes
         /// <summary>Placeholder management capabilities.</summary>
         internal uint PlaceholderManagementCapabilities;
     }
+
+    // =========================================================================
+    // Win32 structures for FileId resolution
+    // =========================================================================
+
+    /// <summary>
+    /// Windows FILETIME structure (100-nanosecond intervals since January 1, 1601).
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FILETIME
+    {
+        /// <summary>Low-order 32 bits of the file time.</summary>
+        internal uint DateTimeLow;
+
+        /// <summary>High-order 32 bits of the file time.</summary>
+        internal uint DateTimeHigh;
+    }
+
+    /// <summary>
+    /// Contains file system metadata retrieved by <c>GetFileInformationByHandle</c>.
+    /// The <c>FileIndexHigh</c>/<c>FileIndexLow</c> fields provide the NTFS file index
+    /// which corresponds to the <c>FileId</c> used in CfAPI callbacks.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BY_HANDLE_FILE_INFORMATION
+    {
+        /// <summary>File attribute flags (FILE_ATTRIBUTE_*).</summary>
+        internal uint FileAttributes;
+
+        /// <summary>File creation time.</summary>
+        internal FILETIME CreationTime;
+
+        /// <summary>Last access time.</summary>
+        internal FILETIME LastAccessTime;
+
+        /// <summary>Last write time.</summary>
+        internal FILETIME LastWriteTime;
+
+        /// <summary>Serial number of the volume containing the file.</summary>
+        internal uint VolumeSerialNumber;
+
+        /// <summary>High-order 32 bits of the file size.</summary>
+        internal uint FileSizeHigh;
+
+        /// <summary>Low-order 32 bits of the file size.</summary>
+        internal uint FileSizeLow;
+
+        /// <summary>Number of hard links to the file.</summary>
+        internal uint NumberOfLinks;
+
+        /// <summary>High-order 32 bits of the NTFS file index (FileId).</summary>
+        internal uint FileIndexHigh;
+
+        /// <summary>Low-order 32 bits of the NTFS file index (FileId).</summary>
+        internal uint FileIndexLow;
+    }
 }

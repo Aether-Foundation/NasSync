@@ -199,4 +199,44 @@ internal static partial class CfNativeMethods
     /// </summary>
     [DllImport("ntdll.dll")]
     internal static extern byte RtlSetProcessPlaceholderCompatibilityMode(byte mode);
+
+    // =========================================================================
+    // File Handle Operations (for FileId resolution)
+    // =========================================================================
+
+    /// <summary>
+    /// Opens a file or device. Used with <see cref="GetFileInformationByHandle"/>
+    /// to retrieve the NTFS file index (FileId) for a given path.
+    /// </summary>
+    /// <param name="lpFileName">The name of the file or device to open.</param>
+    /// <param name="dwDesiredAccess">The requested access (GENERIC_READ = 0x80000000).</param>
+    /// <param name="dwShareMode">The sharing mode (FILE_SHARE_READ|WRITE|DELETE = 0x07).</param>
+    /// <param name="lpSecurityAttributes">Security attributes (IntPtr.Zero for default).</param>
+    /// <param name="dwCreationDisposition">Action on existing/non-existing file (OPEN_EXISTING = 3).</param>
+    /// <param name="dwFlagsAndAttributes">File flags (FILE_FLAG_BACKUP_SEMANTICS = 0x02000000 for directories).</param>
+    /// <param name="hTemplateFile">Template file handle (IntPtr.Zero for none).</param>
+    /// <returns>A safe file handle, or invalid handle on failure.</returns>
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileW(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        IntPtr lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    /// <summary>
+    /// Retrieves file system attributes and metadata for a file by handle.
+    /// Used to extract the NTFS file index (<c>FileIndexHigh</c>/<c>FileIndexLow</c>)
+    /// which matches the <c>FileId</c> in CfAPI callbacks.
+    /// </summary>
+    /// <param name="hFile">A handle to the file (from CreateFileW).</param>
+    /// <param name="lpFileInformation">Receives the file information structure.</param>
+    /// <returns>True on success; false on failure (check GetLastError).</returns>
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetFileInformationByHandle(
+        Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+        out CfNativeTypes.BY_HANDLE_FILE_INFORMATION lpFileInformation);
 }

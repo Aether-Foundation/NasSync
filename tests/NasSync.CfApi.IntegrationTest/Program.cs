@@ -131,8 +131,23 @@ try
 
     await placeholderManager.CreatePlaceholdersAsync(entries, markInSync: true);
 
+    // Register FileId mappings so callbacks can resolve paths
+    foreach (var entry in entries)
+    {
+        string fullPath = Path.Combine(syncRootPath, entry.RelativePath);
+        try
+        {
+            long fileId = PlaceholderManager.GetFileId(fullPath);
+            syncRootManager.PathResolver.RegisterMapping(fileId, fullPath);
+        }
+        catch (Exception)
+        {
+            // Skip files that can't be opened (e.g., permission issues)
+        }
+    }
+
     Console.ForegroundColor = ConsoleColor.Green;
-    Console.WriteLine($"✓ ({entries.Count} items)");
+    Console.WriteLine($"✓ ({entries.Count} items, {syncRootManager.PathResolver.Count} FileId mappings)");
     Console.ResetColor();
 }
 catch (Exception ex)
@@ -223,10 +238,10 @@ Console.ReadKey();
 // ==========================================================================
 sealed class TestCallbackHandler : ICfCallbackHandler
 {
-    public Task FetchDataAsync(string filePath, long offset, long length, Guid transferKey, CancellationToken ct)
+    public Task FetchDataAsync(string filePath, long offset, long length, TransferKey transferKey, Guid volumeGuidName, long fileId, CancellationToken ct)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"  [CALLBACK] FetchData: {filePath} offset={offset} length={length}");
+        Console.WriteLine($"  [CALLBACK] FetchData: {filePath} offset={offset} length={length} transferKey={transferKey.Value} fileId={fileId}");
         Console.ResetColor();
         // In a real implementation, we'd download from NAS and call HydrationDataProvider.ProvideDataAsync
         return Task.CompletedTask;
@@ -240,10 +255,10 @@ sealed class TestCallbackHandler : ICfCallbackHandler
         return Task.CompletedTask;
     }
 
-    public Task CancelFetchDataAsync(string filePath)
+    public Task CancelFetchDataAsync(string filePath, TransferKey transferKey)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"  [CALLBACK] CancelFetchData: {filePath}");
+        Console.WriteLine($"  [CALLBACK] CancelFetchData: {filePath} transferKey={transferKey.Value}");
         Console.ResetColor();
         return Task.CompletedTask;
     }

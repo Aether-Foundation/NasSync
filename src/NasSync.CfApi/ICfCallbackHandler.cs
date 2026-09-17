@@ -5,24 +5,41 @@ namespace NasSync.CfApi;
 /// the cldflt.sys minifilter driver requests operations from the sync engine.
 /// Implement this interface in the sync engine to handle hydration, dehydration,
 /// and file lifecycle events.
+///
+/// <para>
+/// Callbacks are invoked on threads managed by the Cloud Filter platform.
+/// Implementations should be thread-safe and handle exceptions gracefully —
+/// exceptions must not propagate to native code.
+/// </para>
 /// </summary>
 public interface ICfCallbackHandler
 {
     /// <summary>
     /// Called when an application opens a placeholder file and needs data to be downloaded.
-    /// The sync engine must download the requested byte range and provide it via CfExecute.
+    /// The sync engine must download the requested byte range and provide it via
+    /// <see cref="HydrationDataProvider.ProvideDataAsync"/>.
+    ///
+    /// <para>
+    /// This callback is invoked synchronously by the platform. The calling application's
+    /// I/O is blocked until data is provided. Use <c>.GetAwaiter().GetResult()</c> to
+    /// bridge async download code into this synchronous callback.
+    /// </para>
     /// </summary>
     /// <param name="filePath">The full path of the file being hydrated.</param>
     /// <param name="offset">The byte offset to start reading from.</param>
     /// <param name="length">The number of bytes to provide.</param>
     /// <param name="transferKey">The transfer key for providing data via CfExecute.</param>
+    /// <param name="volumeGuidName">The volume GUID from the callback info.</param>
+    /// <param name="fileId">The NTFS file ID from the callback info.</param>
     /// <param name="cancellationToken">Token to cancel the hydration operation.</param>
     /// <returns>A task representing the asynchronous data fetch operation.</returns>
     Task FetchDataAsync(
         string filePath,
         long offset,
         long length,
-        Guid transferKey,
+        TransferKey transferKey,
+        Guid volumeGuidName,
+        long fileId,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -38,8 +55,9 @@ public interface ICfCallbackHandler
     /// Called when a file hydration is cancelled (e.g., user closes the app before download completes).
     /// </summary>
     /// <param name="filePath">The full path of the file whose hydration was cancelled.</param>
+    /// <param name="transferKey">The transfer key of the cancelled operation.</param>
     /// <returns>A task representing any cleanup operations.</returns>
-    Task CancelFetchDataAsync(string filePath);
+    Task CancelFetchDataAsync(string filePath, TransferKey transferKey);
 
     /// <summary>
     /// Called when a file is about to be dehydrated (local cache released).

@@ -28,4 +28,11 @@
     <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.*" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Allow NasSync.Core to access internal CfAPI types (CallbackContext, PathResolver, HydrationDataProvider, etc.) -->
+    <InternalsVisibleTo Include="NasSync.Core" />
+    <InternalsVisibleTo Include="NasSync.CfApi.Tests" />
+    <InternalsVisibleTo Include="NasSync.CfApi.IntegrationTest" />
+  </ItemGroup>
+
 </Project>
