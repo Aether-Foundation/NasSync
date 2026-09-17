@@ -8,6 +8,7 @@
 
     <!-- WinUI 3 configuration -->
     <UseWinUI>true</UseWinUI>
+    <WindowsAppSDKSelfContained Condition="'$(RuntimeIdentifier)' != ''">true</WindowsAppSDKSelfContained>
     <WindowsPackageType>None</WindowsPackageType>
     <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
     <ApplicationManifest>app.manifest</ApplicationManifest>
