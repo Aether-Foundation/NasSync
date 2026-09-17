@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop10="http://schemas.microsoft.com/appx/manifest/desktop/windows10/10"
+  IgnorableNamespaces="uap rescap desktop desktop4 desktop10">
+
+  <Identity
+    Name="NasSync.NasCloudSync"
+    Publisher="CN=NasSync Developer, O=NasSync, C=US"
+    Version="0.1.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>NAS Cloud Sync</DisplayName>
+    <PublisherDisplayName>NasSync</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Synchronize files between your PC and NAS device</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+    <Resource Language="zh-cn" />
+  </Resources>
+
+  <Applications>
+    <Application Id="NasSyncTray"
+      Executable="NasSync.Tray.exe"
+      EntryPoint="Windows.FullTrustApplication"
+      desktop10:RuntimeBehavior="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="NAS Cloud Sync"
+        Description="NAS file synchronization client"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+    <Capability Name="internetClient" />
+    <Capability Name="privateNetworkClientServer" />
+  </Capabilities>
+
+  <!--
+    Desktop4 CloudFiles registration — registers this app as a cloud storage provider
+    so it appears in File Explorer's navigation pane.
+  -->
+  <Extensions>
+    <desktop4:Extension Category="windows.cloudFiles">
+      <desktop4:CloudFiles>
+        <desktop4:ContentUri Source="NasSync" />
+        <desktop4:ProviderDisplayName>NAS Cloud Sync</desktop4:ProviderDisplayName>
+      </desktop4:CloudFiles>
+    </desktop4:Extension>
+  </Extensions>
+
+</Package>

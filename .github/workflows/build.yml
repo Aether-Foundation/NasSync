@@ -1,8 +1,8 @@
 # =============================================================================
 # NAS Cloud Sync Client — CI/CD Pipeline
 # =============================================================================
-# Triggers on push to main/develop, pull requests, and manual dispatch.
-# Builds, tests, and packages the MSIX on Windows runners.
+# Build, test, package and sign the MSIX on GitHub-hosted Windows runners.
+# windows-latest includes Visual Studio 2022 + AppxPackage tools.
 # =============================================================================
 
 name: Build & Package
@@ -22,11 +22,18 @@ on:
         options:
           - Release
           - Debug
+      sign_package:
+        description: "Sign the MSIX package"
+        required: false
+        default: true
+        type: boolean
 
 env:
-  DOTNET_VERSION: "9.0.x"
+  DOTNET_VERSION: "8.0.x"
   BUILD_CONFIGURATION: ${{ github.event.inputs.build_configuration || 'Release' }}
   ARTIFACT_NAME: "NasSync-Package"
+  # Enable WinRT interop — windows-latest has VS build tools for PRI generation
+  WINRT_ENABLED: "true"
 
 jobs:
   # ===========================================================================
@@ -40,18 +47,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for versioning
+          fetch-depth: 0
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Setup MSBuild (for WAP project)
+        uses: microsoft/setup-msbuild@v2
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.wapproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -59,12 +69,45 @@ jobs:
         run: dotnet restore
         shell: pwsh
 
-      - name: Build solution
-        run: dotnet build --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+      - name: Build CfApi with WinRT enabled
+        run: |
+          dotnet build src/NasSync.CfApi/NasSync.CfApi.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore `
+            /p:DefineConstants="WINRT_ENABLED"
+        shell: pwsh
+
+      - name: Build core libraries
+        run: |
+          dotnet build src/NasSync.Core/NasSync.Core.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore
+          dotnet build src/NasSync.Adapters/NasSync.Adapters.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore
+          dotnet build src/NasSync.Adapters.Smb/NasSync.Adapters.Smb.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore
+          dotnet build src/NasSync.Adapters.WebDav/NasSync.Adapters.WebDav.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore
+        shell: pwsh
+
+      - name: Build integration test
+        run: |
+          dotnet build tests/NasSync.CfApi.IntegrationTest/NasSync.CfApi.IntegrationTest.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-restore
         shell: pwsh
 
       - name: Run unit tests
-        run: dotnet test --configuration ${{ env.BUILD_CONFIGURATION }} --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory TestResults
+        run: |
+          dotnet test tests/NasSync.Core.Tests/NasSync.Core.Tests.csproj `
+            --configuration ${{ env.BUILD_CONFIGURATION }} `
+            --no-build `
+            --verbosity normal `
+            --collect:"XPlat Code Coverage" `
+            --results-directory TestResults
         shell: pwsh
 
       - name: Upload test results
@@ -81,17 +124,21 @@ jobs:
           name: build-output-${{ env.BUILD_CONFIGURATION }}
           path: |
             src/*/bin/${{ env.BUILD_CONFIGURATION }}/
+            tests/*/bin/${{ env.BUILD_CONFIGURATION }}/
             !src/*/bin/${{ env.BUILD_CONFIGURATION }}/**/*.pdb
+            !tests/*/bin/${{ env.BUILD_CONFIGURATION }}/**/*.pdb
           retention-days: 7
 
   # ===========================================================================
-  # Package MSIX (only on push to main or manual dispatch)
+  # Package & Sign MSIX
   # ===========================================================================
   package:
     name: Package MSIX
     runs-on: windows-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout repository
@@ -104,11 +151,14 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.wapproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -116,19 +166,69 @@ jobs:
         run: dotnet restore
         shell: pwsh
 
-      - name: Build and publish package
-        run: |
-          dotnet publish src/NasSync.Package/NasSync.Package.wapproj `
-            --configuration ${{ env.BUILD_CONFIGURATION }} `
-            --output ./publish
+      # Generate a self-signed certificate for MSIX signing
+      - name: Generate self-signed certificate
+        if: github.event.inputs.sign_package != 'false'
         shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type Custom `
+            -Subject "CN=NasSync Developer, O=NasSync, C=US" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "NasSync CI Signing Certificate" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}") `
+            -NotAfter (Get-Date).AddYears(1)
+
+          $certPath = "ci-signing-cert.pfx"
+          $certPassword = ConvertTo-SecureString -String "NasSyncCI2026" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath $certPath -Password $certPassword
+
+          # Also export the public cert (.cer) for users to trust
+          Export-Certificate -Cert $cert -FilePath "NasSync-CI-PublicKey.cer"
+
+          Write-Host "Certificate thumbprint: $($cert.Thumbprint)"
+          Write-Host "Certificate subject: $($cert.Subject)"
+
+          # Store thumbprint for packaging step
+          echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      # Build and publish the WAP project
+      - name: Build and publish MSIX package
+        shell: pwsh
+        run: |
+          # Build with WinRT enabled
+          msbuild src/NasSync.Package/NasSync.Package.wapproj `
+            /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+            /p:Platform=x64 `
+            /p:DefineConstants="WINRT_ENABLED" `
+            /p:AppxBundle=Never `
+            /p:AppxPackageDir="../publish/" `
+            /p:UapAppxPackageBuildMode=SideloadOnly `
+            /restore
+
+      # Sign the MSIX if certificate was generated
+      - name: Sign MSIX package
+        if: github.event.inputs.sign_package != 'false'
+        shell: pwsh
+        run: |
+          $msixFiles = Get-ChildItem -Path "publish/" -Filter "*.msix" -Recurse
+          foreach ($msix in $msixFiles) {
+            Write-Host "Signing: $($msix.FullName)"
+            signtool sign /fd SHA256 /a /f "ci-signing-cert.pfx" /p "NasSyncCI2026" $msix.FullName
+            Write-Host "Signed successfully."
+          }
 
       - name: Upload MSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: publish/*.msix
+          path: |
+            publish/**/*.msix
+            publish/**/*.cer
+            NasSync-CI-PublicKey.cer
           retention-days: 30
+          if-no-files-found: warn
 
   # ===========================================================================
   # Release (only on tagged commits to main)
@@ -152,7 +252,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.msix
+          files: |
+            artifacts/**/*.msix
+            artifacts/**/*.cer
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
