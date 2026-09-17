@@ -43,7 +43,8 @@ Provides OneDrive-like File Explorer integration with pluggable NAS/protocol ada
 - **Types**: feat, fix, refactor, docs, test, chore, ci, perf
 - **Scopes**: sync, cfapi, ui, adapter, tray, build
 - **Branches**: main, develop, feature/*, fix/*, release/*
-- **Local only** for now — detailed commit messages with body/footer, no remote push
+- **Push policy**: Remote is configured — **always ask the user to review and push**. Never push directly.
+- **CI/CD**: GitHub Actions workflow in `.github/workflows/build.yml` handles build, test, MSIX packaging, and release.
 
 ## Testing
 

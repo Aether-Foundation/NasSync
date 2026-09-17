@@ -2,6 +2,12 @@
 # NAS Cloud Sync Client
 # ===========================
 
+# ===========================
+# Tool-specific
+# ===========================
+# Claude Code workspace (local only)
+.claude/
+
 # Draft folder — internal use only, NEVER upload
 draft/
 
