@@ -1,0 +1,100 @@
+# EditorConfig — https://editorconfig.org
+root = true
+
+# All files
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# C# files
+[*.{cs,csx,cake}]
+indent_size = 4
+
+# C# code style rules
+[*.cs]
+# Using directives
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+csharp_using_directive_placement = inside_namespace:suggestion
+
+# Code style defaults
+csharp_prefer_simple_using_statement = true:suggestion
+csharp_prefer_braces = true:suggestion
+csharp_style_namespace_declarations = file_scoped:suggestion
+
+# Expression-level preferences
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_auto_properties = true:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = true:suggestion
+dotnet_style_prefer_conditional_expression_over_return = true:suggestion
+dotnet_style_prefer_inferred_tuple_names = true:suggestion
+dotnet_style_prefer_inferred_anonymous_type_member_names = true:suggestion
+
+# Null-checking preferences
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+dotnet_style_explicit_tuple_names = true:suggestion
+
+# Naming conventions
+
+# Interfaces must be PascalCase with I prefix
+dotnet_naming_rule.interface_must_be_ipascal_case.severity = warning
+dotnet_naming_rule.interface_must_be_ipascal_case.symbols = interface_symbols
+dotnet_naming_rule.interface_must_be_ipascal_case.style = ipascal_case_style
+dotnet_naming_symbols.interface_symbols.applicable_kinds = interface
+dotnet_naming_style.ipascal_case_style.required_prefix = I
+dotnet_naming_style.ipascal_case_style.capitalization = pascal_case
+
+# Public members must be PascalCase
+dotnet_naming_rule.public_members_must_be_pascal_case.severity = warning
+dotnet_naming_rule.public_members_must_be_pascal_case.symbols = public_symbols
+dotnet_naming_rule.public_members_must_be_pascal_case.style = pascal_case_style
+dotnet_naming_symbols.public_symbols.applicable_kinds = method, property, event
+dotnet_naming_symbols.public_symbols.applicable_accessibilities = public, protected
+dotnet_naming_style.pascal_case_style.capitalization = pascal_case
+
+# Private fields must be _camelCase
+dotnet_naming_rule.private_fields_must_be_camel_case_with_underscore.severity = warning
+dotnet_naming_rule.private_fields_must_be_camel_case_with_underscore.symbols = private_field_symbols
+dotnet_naming_rule.private_fields_must_be_camel_case_with_underscore.style = underscore_camel_case_style
+dotnet_naming_symbols.private_field_symbols.applicable_kinds = field
+dotnet_naming_symbols.private_field_symbols.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case_style.required_prefix = _
+dotnet_naming_style.underscore_camel_case_style.capitalization = camel_case
+
+# Constants must be UPPER_SNAKE_CASE
+dotnet_naming_rule.constants_must_be_upper_snake_case.severity = warning
+dotnet_naming_rule.constants_must_be_upper_snake_case.symbols = constant_symbols
+dotnet_naming_rule.constants_must_be_upper_snake_case.style = upper_snake_case_style
+dotnet_naming_symbols.constant_symbols.applicable_kinds = field
+dotnet_naming_symbols.constant_symbols.required_modifiers = const
+dotnet_naming_style.upper_snake_case_style.capitalization = all_upper
+
+# XML files
+[*.{xml,csproj,props,targets,wapproj}]
+indent_size = 2
+
+# JSON files
+[*.json]
+indent_size = 2
+
+# YAML files
+[*.{yml,yaml}]
+indent_size = 2
+
+# Markdown files
+[*.md]
+trim_trailing_whitespace = false
+
+# Solution files
+[*.sln]
+indent_style = tab
+
+# Batch files
+[*.{cmd,bat}]
+end_of_line = crlf

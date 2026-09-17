@@ -1,0 +1,119 @@
+# ===========================
+# NAS Cloud Sync Client
+# ===========================
+
+# Draft folder — internal use only, NEVER upload
+draft/
+
+# ===========================
+# .NET / C#
+# ===========================
+[Bb]in/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.cache
+*.log
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# Build results
+[Dd]ebugPublic/
+[Rr]eleases/
+build/
+**/artifacts/
+**/obj/
+
+# ===========================
+# OS generated files
+# ===========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ===========================
+# IDE and editor files
+# ===========================
+*.swp
+*.swo
+*~
+*.orig
+*.bak
+*.tmp
+
+# ===========================
+# Test results
+# ===========================
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+
+# ===========================
+# Publish output
+# ===========================
+*.Publish.xml
+PublishScripts/
+
+# ===========================
+# Package files
+# ===========================
+*.msix
+*.appx
+*.appxbundle
+*.msixbundle
+
+# ===========================
+# Signing keys (sensitive)
+# ===========================
+*.pfx
+*.snk
+!resources/**/*.snk
+
+# ===========================
+# Misc
+# ===========================
+*.pidb
+*.svclog
+*.ndf
+*.mdf
+*.ldf
+*.ndf
