@@ -3,6 +3,12 @@
 # ===========================
 
 # ===========================
+# Generated files
+# ===========================
+**/Generated Files/
+**/Generated\ Files/
+
+# ===========================
 # Tool-specific
 # ===========================
 # Claude Code workspace (local only)
