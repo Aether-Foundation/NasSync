@@ -1,0 +1,57 @@
+<Project>
+
+  <!-- Shared MSBuild properties for all projects in the solution -->
+
+  <PropertyGroup>
+    <!-- Target framework — Windows 11 only -->
+    <TargetFramework>net9.0-windows10.0.22000.0</TargetFramework>
+
+    <!-- Language version -->
+    <LangVersion>latest</LangVersion>
+
+    <!-- Nullable reference types enabled globally -->
+    <Nullable>enable</Nullable>
+
+    <!-- Implicit usings enabled -->
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Treat warnings as errors in Release builds -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+
+    <!-- Generate XML documentation files -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Suppress missing XML comment warning for non-public members -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- Enable .NET analyzers -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+
+    <!-- Deterministic builds -->
+    <Deterministic>true</Deterministic>
+
+    <!-- Assembly metadata -->
+    <Company>NasSync</Company>
+    <Product>NAS Cloud Sync Client</Product>
+    <Copyright>Copyright © 2026</Copyright>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <!-- Debug configuration -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+    <DefineConstants>$(DefineConstants);DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Release configuration -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
+  </PropertyGroup>
+
+</Project>
