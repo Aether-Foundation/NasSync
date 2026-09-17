@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- NAS Cloud Sync Client — 中文（简体）本地化字符串 -->
+
+  <!-- 通用 -->
+  <data name="AppName" xml:space="preserve">
+    <value>NAS 云同步</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>在电脑与 NAS 设备之间同步文件</value>
+  </data>
+
+  <!-- 连接状态 -->
+  <data name="StateConnected" xml:space="preserve">
+    <value>已连接</value>
+  </data>
+  <data name="StateDisconnected" xml:space="preserve">
+    <value>未连接</value>
+  </data>
+  <data name="StateConnecting" xml:space="preserve">
+    <value>正在连接...</value>
+  </data>
+  <data name="StateSyncing" xml:space="preserve">
+    <value>正在同步...</value>
+  </data>
+  <data name="StatePaused" xml:space="preserve">
+    <value>已暂停</value>
+  </data>
+  <data name="StateError" xml:space="preserve">
+    <value>错误</value>
+  </data>
+  <data name="StateOffline" xml:space="preserve">
+    <value>离线</value>
+  </data>
+
+  <!-- 托盘菜单 -->
+  <data name="TrayPauseSync" xml:space="preserve">
+    <value>暂停同步</value>
+  </data>
+  <data name="TrayResumeSync" xml:space="preserve">
+    <value>恢复同步</value>
+  </data>
+  <data name="TraySettings" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="TrayOpenSyncFolder" xml:space="preserve">
+    <value>打开同步文件夹</value>
+  </data>
+  <data name="TrayExit" xml:space="preserve">
+    <value>退出</value>
+  </data>
+  <data name="TrayStatus" xml:space="preserve">
+    <value>状态：{0}</value>
+  </data>
+
+  <!-- 右键菜单 -->
+  <data name="ContextMenuFreeUpSpace" xml:space="preserve">
+    <value>释放空间</value>
+  </data>
+  <data name="ContextMenuAlwaysAvailable" xml:space="preserve">
+    <value>始终保留在此设备上</value>
+  </data>
+
+  <!-- 冲突处理 -->
+  <data name="ConflictTitle" xml:space="preserve">
+    <value>检测到文件冲突</value>
+  </data>
+  <data name="ConflictMessage" xml:space="preserve">
+    <value>文件 "{0}" 在本地和 NAS 上均被修改。已创建副本。</value>
+  </data>
+  <data name="ConflictKeepLocal" xml:space="preserve">
+    <value>保留本地版本</value>
+  </data>
+  <data name="ConflictKeepRemote" xml:space="preserve">
+    <value>保留 NAS 版本</value>
+  </data>
+  <data name="ConflictKeepBoth" xml:space="preserve">
+    <value>两个都保留</value>
+  </data>
+
+  <!-- 通知 -->
+  <data name="NotifySyncComplete" xml:space="preserve">
+    <value>同步完成 — 已更新 {0} 个文件</value>
+  </data>
+  <data name="NotifyConnectionLost" xml:space="preserve">
+    <value>与 NAS 的连接已断开。已缓存的文件仍然可用。</value>
+  </data>
+  <data name="NotifyConnectionRestored" xml:space="preserve">
+    <value>与 NAS 的连接已恢复。正在恢复同步...</value>
+  </data>
+</root>

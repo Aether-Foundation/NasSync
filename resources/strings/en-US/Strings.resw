@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- NAS Cloud Sync Client — English (United States) localization strings -->
+
+  <!-- General -->
+  <data name="AppName" xml:space="preserve">
+    <value>NAS Cloud Sync</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>Synchronize files between your PC and NAS device</value>
+  </data>
+
+  <!-- Connection States -->
+  <data name="StateConnected" xml:space="preserve">
+    <value>Connected</value>
+  </data>
+  <data name="StateDisconnected" xml:space="preserve">
+    <value>Disconnected</value>
+  </data>
+  <data name="StateConnecting" xml:space="preserve">
+    <value>Connecting...</value>
+  </data>
+  <data name="StateSyncing" xml:space="preserve">
+    <value>Syncing...</value>
+  </data>
+  <data name="StatePaused" xml:space="preserve">
+    <value>Paused</value>
+  </data>
+  <data name="StateError" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="StateOffline" xml:space="preserve">
+    <value>Offline</value>
+  </data>
+
+  <!-- Tray Menu -->
+  <data name="TrayPauseSync" xml:space="preserve">
+    <value>Pause Sync</value>
+  </data>
+  <data name="TrayResumeSync" xml:space="preserve">
+    <value>Resume Sync</value>
+  </data>
+  <data name="TraySettings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="TrayOpenSyncFolder" xml:space="preserve">
+    <value>Open Sync Folder</value>
+  </data>
+  <data name="TrayExit" xml:space="preserve">
+    <value>Exit</value>
+  </data>
+  <data name="TrayStatus" xml:space="preserve">
+    <value>Status: {0}</value>
+  </data>
+
+  <!-- Context Menu -->
+  <data name="ContextMenuFreeUpSpace" xml:space="preserve">
+    <value>Free up space</value>
+  </data>
+  <data name="ContextMenuAlwaysAvailable" xml:space="preserve">
+    <value>Always keep on this device</value>
+  </data>
+
+  <!-- Conflict Resolution -->
+  <data name="ConflictTitle" xml:space="preserve">
+    <value>File Conflict Detected</value>
+  </data>
+  <data name="ConflictMessage" xml:space="preserve">
+    <value>The file "{0}" was modified on both your PC and the NAS. A copy has been created.</value>
+  </data>
+  <data name="ConflictKeepLocal" xml:space="preserve">
+    <value>Keep Local Version</value>
+  </data>
+  <data name="ConflictKeepRemote" xml:space="preserve">
+    <value>Keep NAS Version</value>
+  </data>
+  <data name="ConflictKeepBoth" xml:space="preserve">
+    <value>Keep Both</value>
+  </data>
+
+  <!-- Notifications -->
+  <data name="NotifySyncComplete" xml:space="preserve">
+    <value>Sync complete — {0} files updated</value>
+  </data>
+  <data name="NotifyConnectionLost" xml:space="preserve">
+    <value>Connection to NAS lost. Cached files are still available.</value>
+  </data>
+  <data name="NotifyConnectionRestored" xml:space="preserve">
+    <value>Connection to NAS restored. Resuming sync...</value>
+  </data>
+</root>
